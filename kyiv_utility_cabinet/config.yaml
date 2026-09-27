@@ -1,5 +1,5 @@
 name: "Kyiv Utility Cabinet"
-version: "2.2.0"
+version: "2.3.0"
 slug: "kyiv_utility_cabinet"
 description: "Logs into Kyiv utility provider personal cabinets (YASNO, Kyivvodokanal, Kyivteploenergo, Kyivgaz) on a schedule and publishes the data to Home Assistant over MQTT"
 url: "https://github.com/avoloshyn79/kyiv-utility-cabinet"
@@ -9,6 +9,7 @@ arch:
 startup: application
 boot: auto
 init: false
+homeassistant_api: true
 services:
   - mqtt:want
 ports:
@@ -27,6 +28,13 @@ options:
     phone: ""
     password: ""
     interval_minutes: 1440
+    submit_readings:
+      enabled: false
+      day_of_month: 25
+      meter_type: "auto"
+      entity_single: ""
+      entity_day: ""
+      entity_night: ""
 schema:
   api_key: str
   discovery_prefix: str
@@ -39,3 +47,10 @@ schema:
     phone: str?
     password: password?
     interval_minutes: int(5,10080)
+    submit_readings:
+      enabled: bool
+      day_of_month: int(1,28)
+      meter_type: list(auto|single|day_night)
+      entity_single: str?
+      entity_day: str?
+      entity_night: str?

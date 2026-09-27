@@ -30,9 +30,38 @@ automations.
 | `yasno.enabled` | Turn on scheduled polling + MQTT publishing for YASNO. |
 | `yasno.phone` / `yasno.password` | YASNO personal cabinet login. |
 | `yasno.interval_minutes` | How often to log in and refresh (default 1440 = once a day). |
+| `yasno.submit_readings.enabled` | Turn on automatic monthly meter reading submission to YASNO. |
+| `yasno.submit_readings.day_of_month` | Day of the month to submit on (default 25). Checked once an hour, so any restart or delay that day still catches it. |
+| `yasno.submit_readings.meter_type` | `auto` (default, matches your actual meter from the last reading YASNO already has), `single`, or `day_night` — override only if auto-detection picks the wrong one. |
+| `yasno.submit_readings.entity_single` | Home Assistant entity ID holding the current total meter reading (single-zone meters). |
+| `yasno.submit_readings.entity_day` / `entity_night` | Home Assistant entity IDs holding the current day/night meter readings (two-zone meters). |
 
 If your YASNO profile has more than one account, the first B2C account is
 used automatically (no option to pick a different one yet).
+
+## Automatic meter reading submission
+
+Some YASNO accounts require you to self-report your meter reading each
+month. With `yasno.submit_readings.enabled: true`, the add-on reads the
+current value(s) directly from Home Assistant entities you point it at
+(via Home Assistant's own API — no separate credentials needed) and submits
+them to YASNO once, on the configured day of the month.
+
+- **Meter type**: left on `auto`, the add-on looks at the last reading
+  YASNO already has on file to tell a two-zone (day/night) meter from a
+  single-zone one, the same way the sensors decide which ones to show. Set
+  `single` or `day_night` explicitly if you ever need to override that.
+- **Entities**: fill in `entity_single` for a single-zone meter, or both
+  `entity_day` and `entity_night` for a two-zone one — typically a utility
+  meter or template sensor you already have in Home Assistant tracking your
+  actual meter's dial/display.
+- **Once per month**: a submission is recorded in `/data/` once it succeeds,
+  so it won't be repeated again that month even across add-on restarts. If
+  it fails (e.g. an entity is unavailable that hour), it retries on every
+  hourly check until it succeeds or the month rolls over.
+- The zone labels sent to YASNO (`"Day"`/`"Night"`/`"Alltime"`) are taken
+  from your account's own last reading when available, so the payload
+  matches whatever YASNO itself calls each zone rather than a guess.
 
 ## What gets created in Home Assistant
 

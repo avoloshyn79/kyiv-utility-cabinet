@@ -28,6 +28,45 @@ async function apiGet(path, cookie) {
   return response.json();
 }
 
+async function apiPost(path, cookie, body) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "Content-Type": "application/json",
+      Origin: "https://yasno.ua",
+      Referer: "https://yasno.ua/",
+      "User-Agent": USER_AGENT,
+      "x-platform": "Web",
+      Cookie: cookie,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    throw new YasnoAuthError(`Authentication failed (HTTP ${response.status}) for ${path}`);
+  }
+  if (response.status >= 400) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`YASNO API returned HTTP ${response.status} for ${path}: ${text.slice(0, 200)}`);
+  }
+  if (response.status === 204) return null;
+  return response.json().catch(() => null);
+}
+
+/**
+ * Submits meter readings to YASNO, e.g.
+ * [{ zone: "Day", value: 604 }, { zone: "Night", value: 4485 }].
+ * Use the exact zone labels YASNO itself returned for this account (see
+ * `meter_reading_zone_names` from fetchAccountData) rather than guessing
+ * casing - the API is presumably an enum match, not case-insensitive.
+ */
+export async function submitMeterReadings(cookie, accountId, meteringReadings) {
+  return apiPost(`/api/account-service/users/me/b2c/meter-readings/${accountId}`, cookie, {
+    meteringReadings,
+  });
+}
+
 function selectAccount(accounts, accountId) {
   if (accountId) {
     // Accept either the internal API id or the customer-facing account
@@ -82,11 +121,15 @@ function extractLastPayment(paymentsData) {
 
 function extractLastMeterReadings(readingsData) {
   const items = readingsData?.items;
-  if (!Array.isArray(items) || items.length === 0) return {};
-  const info = { date: items[0]?.createdOn ?? null };
+  if (!Array.isArray(items) || items.length === 0) return { zoneNames: {} };
+  const info = { date: items[0]?.createdOn ?? null, zoneNames: {} };
   for (const reading of items[0]?.meteringReadings ?? []) {
-    const zone = (reading?.zone || "").toLowerCase();
-    if (zone) info[zone] = safeFloat(reading?.value);
+    const rawZone = reading?.zone || "";
+    const zone = rawZone.toLowerCase();
+    if (zone) {
+      info[zone] = safeFloat(reading?.value);
+      info.zoneNames[zone] = rawZone;
+    }
   }
   return info;
 }
@@ -162,5 +205,6 @@ export async function fetchAccountData(cookie, accountId) {
     meter_reading_night: meterReadingsInfo.night ?? null,
     meter_reading_alltime: meterReadingsInfo.alltime ?? null,
     meter_reading_date: meterReadingsInfo.date ?? null,
+    meter_reading_zone_names: meterReadingsInfo.zoneNames,
   };
 }

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.3.0
+
+- Added automatic monthly meter reading submission to YASNO
+  (`yasno.submit_readings`): the add-on reads the current value(s) from
+  Home Assistant entities you configure (`entity_single`, or `entity_day` +
+  `entity_night` for a two-zone meter) via Home Assistant's own Core API -
+  requires no separate credentials, just `homeassistant_api: true` on the
+  add-on (already set). Ported the actual submission call
+  (`POST /api/account-service/users/me/b2c/meter-readings/{account_id}`)
+  from the original `ha-yasno-cabinet` integration's
+  `send_meter_readings` service.
+- Meter type (single-zone vs day/night) is auto-detected from your
+  account's last known reading by default, with `meter_type: single` /
+  `day_night` to override. The zone labels sent back to YASNO are the
+  exact ones it already returned for your account, not a hardcoded guess.
+- Runs on its own hourly check independent of `yasno.interval_minutes`, so
+  it still reliably catches the configured `day_of_month` even if the data
+  refresh interval is set to something long like a week. A successful
+  submission is recorded to disk so it isn't repeated again that month,
+  including across add-on restarts; a failed one retries every hour until
+  it succeeds or the month rolls over.
+
 ## 2.2.0
 
 - Detect YASNO's own "невірний телефон або пароль" (invalid phone/password)
