@@ -60,6 +60,18 @@ is reachable before troubleshooting further:
 curl http://kyiv_utility_cabinet:8099/health
 ```
 
+### Debugging a failed login
+
+If a login fails (timeout, unexpected page), the add-on saves what it was
+looking at to `/data/debug/` and the log message points you to these
+endpoints (same `X-Api-Key` as above if configured):
+
+| Endpoint | Contents |
+|---|---|
+| `GET /debug/yasno/screenshot` | Full-page PNG of the browser at the moment it failed |
+| `GET /debug/yasno/html` | The page's HTML at that moment |
+| `GET /debug/yasno/info` | Plain text: timestamp, URL, page title, error message |
+
 ## Notes
 
 - Each login takes a few seconds and a temporary memory/CPU spike (real

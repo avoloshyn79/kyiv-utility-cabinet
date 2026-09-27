@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.1
+
+- Fixed `page.waitForURL` timeouts during login: it was waiting for the
+  full `load` event by default, which a heavy SPA can miss on slower
+  hardware (e.g. Raspberry Pi) even after the redirect itself already
+  happened. Now waits only for the URL to commit, with a longer timeout.
+- On a failed login, the add-on now saves a screenshot, the page HTML, and
+  basic info (URL, title, error) to `/data/debug/`, retrievable via
+  `GET /debug/yasno/{screenshot,html,info}` — makes failures diagnosable
+  from the logs alone instead of guessing.
+
 ## 2.0.0
 
 - Added scheduled polling + MQTT discovery publishing: the add-on now logs

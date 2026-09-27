@@ -5,12 +5,20 @@
 // other caller of these same site modules, using credentials from the
 // add-on's own configuration.)
 import { createServer } from "node:http";
+import { readFileSync, statSync } from "node:fs";
 import { login as yasnoLogin } from "./sites/yasno.mjs";
 
 const PORT = 8099;
+const DEBUG_DIR = "/data/debug";
 
 const SITES = {
   yasno: yasnoLogin,
+};
+
+const DEBUG_FILES = {
+  "/debug/yasno/screenshot": { file: `${DEBUG_DIR}/yasno-last-failure.png`, contentType: "image/png" },
+  "/debug/yasno/html": { file: `${DEBUG_DIR}/yasno-last-failure.html`, contentType: "text/html; charset=utf-8" },
+  "/debug/yasno/info": { file: `${DEBUG_DIR}/yasno-last-failure.txt`, contentType: "text/plain; charset=utf-8" },
 };
 
 function log(message) {
@@ -48,6 +56,21 @@ export function startHttpServer(apiKey) {
 
     if (req.method === "GET" && url.pathname === "/health") {
       return sendJson(res, 200, { ok: true, sites: Object.keys(SITES) });
+    }
+
+    const debugFile = req.method === "GET" ? DEBUG_FILES[url.pathname] : undefined;
+    if (debugFile) {
+      if (apiKey && req.headers["x-api-key"] !== apiKey) {
+        return sendJson(res, 401, { error: "Missing or invalid X-Api-Key header" });
+      }
+      try {
+        statSync(debugFile.file);
+        const body = readFileSync(debugFile.file);
+        res.writeHead(200, { "Content-Type": debugFile.contentType, "Content-Length": body.length });
+        return res.end(body);
+      } catch {
+        return sendJson(res, 404, { error: "No failure recorded yet for this site" });
+      }
     }
 
     if (req.method !== "POST" || !url.pathname.startsWith("/fetch/")) {
