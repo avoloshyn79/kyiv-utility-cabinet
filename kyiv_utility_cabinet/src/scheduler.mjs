@@ -14,13 +14,10 @@ import { login as yasnoLogin } from "./sites/yasno.mjs";
 import { fetchAccountData, submitMeterReadings, YasnoAuthError } from "./sites/yasno-data.mjs";
 import { publishYasnoData, publishYasnoSubmitButton } from "./mqtt-publish.mjs";
 import { getEntityStateAsNumber } from "./ha-api.mjs";
+import { log, debugLog } from "./logger.mjs";
 
 const SUBMISSION_STATE_FILE = "/data/kyiv-utility-cabinet-submissions.json";
 const SUBMISSION_CHECK_INTERVAL_MS = 60 * 60 * 1000;
-
-function log(service, message) {
-  console.log(`[${new Date().toISOString()}] [${service}] ${message}`);
-}
 
 // Guards against the poll loop and the submission check both starting a
 // login at the same moment (they run on independent timers and can land on
@@ -114,17 +111,18 @@ async function buildMeteringReadings(submitConfig, isDayNight, zoneNames) {
   return [{ zone: zoneNames?.alltime || "Alltime", value }];
 }
 
-// Does the actual login + read-entities + submit work, recording the month
-// so the scheduled check (below) won't also submit again. Shared by the
-// scheduled day-of-month check and the manual "Submit meter reading now"
-// MQTT button - the button ignores the day/once-per-month gating since a
-// press is an explicit request, but still records the month afterwards.
-async function submitYasnoReadingNow(config, state) {
+// Does the actual login + read-entities + submit work, then records the
+// month as done - shared by the scheduled day-of-month check and the manual
+// "Submit meter reading now" MQTT button, so whichever one runs first each
+// month blocks the other for the rest of it. `trigger` ("scheduled" or
+// "manual") is only for logging/audit - it doesn't change the behavior.
+async function submitYasnoReadingNow(config, state, trigger) {
   if (state.submitInProgress) {
-    log("yasno", "Meter reading submission already in progress, ignoring this request.");
+    log("yasno", `[${trigger}] Meter reading submission already in progress, ignoring this request.`);
     return;
   }
   state.submitInProgress = true;
+  const yearMonth = currentYearMonth(new Date());
 
   try {
     const submitConfig = config.submitReadings;
@@ -136,24 +134,29 @@ async function submitYasnoReadingNow(config, state) {
     const isDayNight = resolveMeterIsDayNight(submitConfig, state.lastData);
     const readings = await buildMeteringReadings(submitConfig, isDayNight, state.lastData.meter_reading_zone_names);
 
-    const yearMonth = currentYearMonth(new Date());
-    log("yasno", `Submitting meter reading(s) for ${yearMonth}: ${JSON.stringify(readings)}`);
+    log("yasno", `[${trigger}] Submitting meter reading(s) for ${yearMonth}: ${JSON.stringify(readings)}`);
     await submitMeterReadings(state.cookie, state.lastData.account_id, readings);
-    log("yasno", "Meter reading submitted.");
+    log("yasno", `[${trigger}] Meter reading submitted for ${yearMonth}.`);
 
     const submissionState = loadSubmissionState();
-    submissionState.yasno = yearMonth;
+    submissionState.yasno = { yearMonth, trigger, submittedAt: new Date().toISOString() };
     saveSubmissionState(submissionState);
   } catch (err) {
     if (err instanceof YasnoAuthError) {
       state.cookie = "";
     }
-    log("yasno", `Meter reading submission FAILED: ${err.message}`);
+    log("yasno", `[${trigger}] Meter reading submission FAILED: ${err.message}`);
   } finally {
     state.submitInProgress = false;
   }
 }
 
+// Guarantees the automatic path fires at most once per calendar month: it
+// only runs on the configured day, and only if the persisted record (shared
+// with the manual button - see submitYasnoReadingNow) doesn't already show
+// this month as done, however it got done. Re-checked fresh from disk on
+// every hourly tick so a manual submission earlier the same month is picked
+// up immediately, even across an add-on restart.
 async function checkAndSubmitYasnoReading(config, state) {
   const submitConfig = config.submitReadings;
   if (!submitConfig?.enabled) return;
@@ -161,10 +164,23 @@ async function checkAndSubmitYasnoReading(config, state) {
   const now = new Date();
   if (now.getDate() !== submitConfig.dayOfMonth) return;
 
+  const yearMonth = currentYearMonth(now);
   const submissionState = loadSubmissionState();
-  if (submissionState.yasno === currentYearMonth(now)) return;
+  const already = submissionState.yasno;
+  // `already` is an object as of 2.5.0; a plain year-month string means the
+  // marker was written by an older version - either way, compare the month.
+  const alreadyYearMonth = typeof already === "string" ? already : already?.yearMonth;
+  if (alreadyYearMonth === yearMonth) {
+    debugLog(
+      "yasno",
+      typeof already === "string"
+        ? `Scheduled submission for ${yearMonth} skipped - already submitted earlier.`
+        : `Scheduled submission for ${yearMonth} skipped - already submitted (trigger=${already.trigger} at ${already.submittedAt}).`
+    );
+    return;
+  }
 
-  await submitYasnoReadingNow(config, state);
+  await submitYasnoReadingNow(config, state, "scheduled");
 }
 
 /**
@@ -220,7 +236,7 @@ export function startScheduler(mqttClient, options) {
       mqttClient.on("message", (topic) => {
         if (topic !== commandTopic) return;
         log("yasno", "Manual meter reading submission requested via button.");
-        submitYasnoReadingNow(config, state);
+        submitYasnoReadingNow(config, state, "manual");
       });
       log("yasno", "Manual 'Submit meter reading now' button published.");
     }

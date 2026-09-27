@@ -8,6 +8,7 @@
 // was doing at the time.
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { debugLog } from "../logger.mjs";
 
 const DEBUG_DIR = "/data/debug";
 const HEARTBEAT_MS = 8000;
@@ -21,23 +22,33 @@ const KNOWN_LOGIN_ERRORS = [
   { pattern: /введено невірний телефон або пароль/i, message: "Invalid phone number or password" },
 ];
 
+// Always-on: attempt/retry outcomes and failure diagnostics - the minimum
+// needed to tell what happened from the Supervisor log alone.
 function log(message) {
   console.log(`[${new Date().toISOString()}] [yasno:login] ${message}`);
+}
+
+// Debug-only: per-step play-by-play and browser-internal noise (console
+// errors, failed sub-requests, 4xx/5xx responses) - most of it fires on
+// every successful run too, so it's opt-in via the `debug` add-on option
+// rather than always cluttering the log.
+function stepLog(message) {
+  debugLog("yasno:login", message);
 }
 
 function attachPageDiagnostics(page) {
   page.on("console", (msg) => {
     const type = msg.type();
     if (type === "error" || type === "warning") {
-      log(`page console [${type}]: ${msg.text().slice(0, 300)}`);
+      stepLog(`page console [${type}]: ${msg.text().slice(0, 300)}`);
     }
   });
-  page.on("pageerror", (err) => log(`page error: ${err.message.slice(0, 300)}`));
+  page.on("pageerror", (err) => stepLog(`page error: ${err.message.slice(0, 300)}`));
   page.on("requestfailed", (req) => {
-    log(`request failed: ${req.method()} ${req.url()} - ${req.failure()?.errorText ?? "unknown reason"}`);
+    stepLog(`request failed: ${req.method()} ${req.url()} - ${req.failure()?.errorText ?? "unknown reason"}`);
   });
   page.on("response", (res) => {
-    if (res.status() >= 400) log(`response ${res.status()}: ${res.url()}`);
+    if (res.status() >= 400) stepLog(`response ${res.status()}: ${res.url()}`);
   });
 }
 
@@ -92,7 +103,7 @@ async function waitForOutcome(page, { successPattern, timeoutMs, label }) {
     if (Date.now() - lastHeartbeatAt > HEARTBEAT_MS) {
       lastHeartbeatAt = Date.now();
       const title = await page.title().catch(() => "(unavailable)");
-      log(`still waiting (${label})... url=${page.url()} title="${title}" text="${text.slice(0, 150)}"`);
+      stepLog(`still waiting (${label})... url=${page.url()} title="${title}" text="${text.slice(0, 150)}"`);
     }
 
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
@@ -102,7 +113,7 @@ async function waitForOutcome(page, { successPattern, timeoutMs, label }) {
 async function dismissOnboarding(page) {
   const modal = page.locator(".onboarding-modal__title").first();
   if (await modal.isVisible().catch(() => false)) {
-    log("Onboarding modal present, dismissing...");
+    stepLog("Onboarding modal present, dismissing...");
     await page.keyboard.press("Escape").catch(() => {});
     await page.waitForTimeout(300);
     const closeBtn = page.locator("button:has(svg)").first();
@@ -189,9 +200,9 @@ export async function login({ phone, password }) {
 }
 
 async function attemptLogin({ phone, password }) {
-  log("Launching headless Chromium...");
+  stepLog("Launching headless Chromium...");
   const browser = await chromium.launch({ headless: true });
-  log(`Chromium launched. Version: ${browser.version()}`);
+  stepLog(`Chromium launched. Version: ${browser.version()}`);
   const context = await browser.newContext({
     locale: "uk-UA",
     userAgent:
@@ -201,47 +212,49 @@ async function attemptLogin({ phone, password }) {
   attachPageDiagnostics(page);
 
   try {
-    log("Navigating to https://yasno.ua/my/ ...");
+    stepLog("Navigating to https://yasno.ua/my/ ...");
     const response = await page.goto("https://yasno.ua/my/", { waitUntil: "domcontentloaded", timeout: 60000 });
-    log(`Navigation done: HTTP ${response?.status() ?? "?"}, url=${page.url()}`);
+    stepLog(`Navigation done: HTTP ${response?.status() ?? "?"}, url=${page.url()}`);
 
-    log("Waiting for client-side redirect to login.yasno.ua...");
+    stepLog("Waiting for client-side redirect to login.yasno.ua...");
     await waitForOutcome(page, {
       successPattern: /login\.yasno\.ua/,
       timeoutMs: 45000,
       label: "redirect to login.yasno.ua",
     });
-    log(`Redirected. url=${page.url()}`);
-    await page.waitForLoadState("networkidle", { timeout: 45000 }).catch((e) => log(`networkidle wait: ${e.message}`));
+    stepLog(`Redirected. url=${page.url()}`);
+    await page
+      .waitForLoadState("networkidle", { timeout: 45000 })
+      .catch((e) => stepLog(`networkidle wait: ${e.message}`));
 
     await dismissOnboarding(page);
 
-    log("Filling phone number...");
+    stepLog("Filling phone number...");
     const usernameInput = page.locator("input[name='username']");
     await usernameInput.waitFor({ state: "visible", timeout: 15000 });
     await usernameInput.fill(phone);
     await page.getByRole("button", { name: "Продовжити" }).click();
 
-    log("Waiting for password field...");
+    stepLog("Waiting for password field...");
     const passwordInput = page.locator("input[name='password']");
     await passwordInput.waitFor({ state: "visible", timeout: 15000 });
-    log("Filling password and submitting...");
+    stepLog("Filling password and submitting...");
     await passwordInput.fill(password);
     await page.getByRole("button", { name: "Увійти" }).click();
 
-    log("Waiting for redirect to personal-accounts...");
+    stepLog("Waiting for redirect to personal-accounts...");
     await waitForOutcome(page, {
       successPattern: /yasno\.ua\/my\/personal-accounts/,
       timeoutMs: 45000,
       label: "redirect to personal-accounts",
     });
-    log(`Logged in. url=${page.url()}`);
+    stepLog(`Logged in. url=${page.url()}`);
 
     const cookies = await context.cookies("https://app.yasno.ua");
     if (cookies.length === 0) {
       throw new Error("Login appeared to succeed but no cookies were returned for app.yasno.ua");
     }
-    log(`Got ${cookies.length} cookie(s) for app.yasno.ua.`);
+    stepLog(`Got ${cookies.length} cookie(s) for app.yasno.ua.`);
     return { cookie: cookies.map((c) => `${c.name}=${c.value}`).join("; ") };
   } catch (err) {
     throw await saveFailureArtifacts(page, err);

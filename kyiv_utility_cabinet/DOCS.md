@@ -24,6 +24,7 @@ automations.
 
 | Option | Description |
 |---|---|
+| `debug` | Off by default. Turn on for a detailed play-by-play of the login flow (every step, browser console errors, failed sub-requests, HTTP responses ≥400) - useful when troubleshooting, too noisy to leave on normally. Attempt/retry outcomes and failure snapshots are always logged regardless of this setting. |
 | `api_key` | Shared secret required in the `X-Api-Key` header for manual `/fetch/<site>` calls. Leave empty to disable the check (not recommended once this add-on is reachable from more than just Home Assistant itself). |
 | `discovery_prefix` | MQTT discovery prefix, must match Home Assistant's MQTT integration setting (default `homeassistant`). |
 | `mqtt_host` / `mqtt_port` / `mqtt_username` / `mqtt_password` | Broker connection. Leave blank to use the broker Home Assistant's own MQTT integration is configured with (auto-detected via the add-on's `mqtt:want` service dependency — works out of the box with the Mosquitto broker add-on). |
@@ -55,13 +56,19 @@ them to YASNO once, on the configured day of the month.
   `entity_day` and `entity_night` for a two-zone one — typically a utility
   meter or template sensor you already have in Home Assistant tracking your
   actual meter's dial/display.
-- **Once per month**: a submission is recorded in `/data/` once it succeeds,
-  so it won't be repeated again that month even across add-on restarts. If
-  it fails (e.g. an entity is unavailable that hour), it retries on every
-  hourly check until it succeeds or the month rolls over.
+- **Guaranteed once per month, never more**: whichever happens first each
+  month - the scheduled day arriving, or you pressing the manual button
+  below - is recorded to `/data/` and blocks the other for the rest of that
+  month, even across add-on restarts. A failed attempt (e.g. an entity is
+  unavailable that hour) isn't recorded, so the scheduled check keeps
+  retrying hourly until it succeeds or the month rolls over.
 - The zone labels sent to YASNO (`"Day"`/`"Night"`/`"Alltime"`) are taken
   from your account's own last reading when available, so the payload
   matches whatever YASNO itself calls each zone rather than a guess.
+- **Logging**: every attempt logs what it's about to submit, whether it
+  succeeded or failed, and whether it was triggered by the schedule or the
+  manual button (`[scheduled]` / `[manual]` tag on each log line) - always
+  on, independent of the `debug` option above.
 
 ### Manual submission
 

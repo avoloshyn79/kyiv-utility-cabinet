@@ -2,11 +2,12 @@ import { readFileSync } from "node:fs";
 import { startHttpServer } from "./server.mjs";
 import { connectMqtt } from "./mqtt-publish.mjs";
 import { startScheduler } from "./scheduler.mjs";
+import { setDebugEnabled, log as sharedLog } from "./logger.mjs";
 
 const OPTIONS_PATH = "/data/options.json";
 
 function log(message) {
-  console.log(`[${new Date().toISOString()}] [main] ${message}`);
+  sharedLog("main", message);
 }
 
 function loadOptions() {
@@ -31,6 +32,9 @@ function resolveMqttConfig(options) {
 
 function main() {
   const options = loadOptions();
+
+  setDebugEnabled(options.debug);
+  log(`Debug logging is ${options.debug ? "ON" : "off"}.`);
 
   startHttpServer(options.api_key || "");
 

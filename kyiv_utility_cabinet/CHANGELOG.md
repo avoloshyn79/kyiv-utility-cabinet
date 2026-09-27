@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.5.0
+
+- Added a `debug` option (off by default). On, it brings back the full
+  step-by-step login play-by-play, browser console errors, failed
+  sub-requests, and HTTP responses ≥400 - all of that now goes through a
+  shared `debugLog()` instead of always printing, so normal operation stays
+  quiet. Attempt/retry outcomes and failure snapshots (screenshot/HTML/info
+  under `/data/debug/`) are unaffected - they always log, since that's
+  exactly the information needed right when something breaks.
+- Meter reading submissions (scheduled and manual) now log with an explicit
+  `[scheduled]` / `[manual]` tag on every line, and the persisted
+  once-per-month record also keeps which one it was and when, not just the
+  month - visible in the log when the scheduled check skips a month because
+  the button already covered it.
+- Hardened the once-per-month guarantee: the scheduled check and the manual
+  button share one record, so whichever runs first each month blocks the
+  other for the rest of it, and the check re-reads that record fresh from
+  disk every hourly tick (picks up a manual submission immediately, and
+  survives an add-on restart without risking a second submission the same
+  month). Backward-compatible with the plain year-month string the record
+  used before this version.
+
 ## 2.4.0
 
 - Added a **Submit meter reading now** button (via MQTT discovery, on the
