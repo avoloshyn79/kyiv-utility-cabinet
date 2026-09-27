@@ -130,13 +130,15 @@ sign-in has strong bot defenses of its own; automating a real login into it
 risks the account getting flagged, and breaks outright with 2FA), so this
 has to be a real, one-time human action:
 
-1. On your own computer, from inside a checkout of this repo's
-   `kyiv_utility_cabinet/` folder (with `npm install` and
-   `npx playwright install chromium` already run - the same setup used for
-   local testing), run:
+1. On your own computer (with Google Chrome already installed), from
+   inside a checkout of this repo's `kyiv_utility_cabinet/` folder
+   (`npm install` already run), run:
    ```
    node tools/setup-kyivvodokanal-profile.mjs
    ```
+   This uses your real installed Chrome, not a bundled test build - more
+   authentic for signing into Google, and avoids the "this browser may not
+   be secure" warning Google shows for unbranded Chromium builds.
 2. A real, visible Chromium window opens. Log into your Google account
    normally, then go to `https://my.vodokanal.kiev.ua/sign-in` and log in
    there too (solving the captcha as usual - it's just you, in a real

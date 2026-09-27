@@ -12,11 +12,18 @@
 // this has to be a genuine human action, done once, in a browser you can
 // actually see.
 //
+// Uses your actual installed Google Chrome (channel: "chrome") rather than
+// Playwright's bundled test Chromium build - more authentic for signing
+// into a real Google account, and avoids Google's "this browser may not be
+// secure" warning that unbranded Chromium builds can trigger. Requires
+// Google Chrome to already be installed on this computer.
+//
 // Usage (run from inside kyiv_utility_cabinet/, so it picks up the
 // playwright install already there):
 //   node tools/setup-kyivvodokanal-profile.mjs [output-dir]
 //
-// If you haven't already: npm install && npx playwright install chromium
+// If you haven't already: npm install (Chrome itself must already be
+// installed separately - this does not use `npx playwright install`)
 //
 // Defaults to a folder under your OS temp directory so nothing lands in
 // this git repo by accident - it will contain real session cookies.
@@ -45,9 +52,8 @@ console.log("");
 
 const context = await chromium.launchPersistentContext(outDir, {
   headless: false,
+  channel: "chrome",
   locale: "uk-UA",
-  userAgent:
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
 });
 
 const page = context.pages()[0] ?? (await context.newPage());
