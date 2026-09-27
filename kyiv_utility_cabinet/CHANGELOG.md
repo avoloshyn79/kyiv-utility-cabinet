@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.6.1
+
+- Kyivvodokanal now logs in with a persistent Chromium profile
+  (`/data/kyivvodokanal-chrome-profile`) instead of a fresh throwaway
+  browser per login, so Google's own cookies (recaptcha risk signals
+  included) accumulate across logins like they would in a real browser you
+  keep reusing, instead of every login looking like a brand-new device.
+  Added a module-level login queue so the manual `/fetch/kyivvodokanal`
+  HTTP call and the scheduler can't both try to open that same profile
+  directory at once (Chromium only allows one instance per profile).
+  Verified locally: the profile persists correctly across two consecutive
+  logins, but reCAPTCHA still challenged both from this environment's
+  datacenter network - persistence alone isn't a guaranteed fix, and matters
+  most from a real residential network used over time, which needs testing
+  on an actual Home Assistant install to confirm either way.
+
 ## 2.6.0
 
 - Added Kyivvodokanal support: scheduled login + MQTT publishing

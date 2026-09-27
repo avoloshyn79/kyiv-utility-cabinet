@@ -6,13 +6,20 @@
 // browser to hide that it's automation-controlled. If reCAPTCHA decides to
 // challenge the login, it fails with a clear error instead of retrying
 // blindly - whether the plain checkbox click is accepted appears to depend
-// on the network/account reputation Google sees, so this may work from one
-// network and not another.
+// heavily on signals Google sees across logins: a brand-new, cookie-less
+// browser profile looks far more suspicious than one with an actual history.
+//
+// To help with that, this uses a *persistent* Chromium profile stored under
+// /data/ instead of a fresh throwaway one per login - Google's own cookies
+// (recaptcha risk cookies included) accumulate across runs the same way
+// they would in a real browser you keep reusing, rather than every login
+// looking like a brand-new device to Google.
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { debugLog } from "../logger.mjs";
 
 const DEBUG_DIR = "/data/debug";
+const PROFILE_DIR = "/data/kyivvodokanal-chrome-profile";
 const POLL_MS = 500;
 const HEARTBEAT_MS = 8000;
 const LOGIN_URL = "https://my.vodokanal.kiev.ua/sign-in";
@@ -149,8 +156,7 @@ async function saveFailureArtifacts(page, err) {
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 5000;
 
-// Common site-module interface: login(credentials) -> Promise<{ cookie: string }>
-export async function login({ email, password }) {
+async function loginWithRetries({ email, password }) {
   let lastErr;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     if (attempt > 1) {
@@ -171,10 +177,28 @@ export async function login({ email, password }) {
   throw lastErr;
 }
 
+// The persistent profile directory (see the file header) can only be opened
+// by one Chromium instance at a time - a second `launchPersistentContext`
+// against the same directory while one is already open would fail outright.
+// The scheduler already serializes its own login calls, but the manual
+// POST /fetch/kyivvodokanal HTTP API calls login() directly and could land
+// at the same time. Queueing every call through this module-level chain
+// guarantees only one login ever touches the profile directory at once,
+// regardless of caller.
+let loginQueue = Promise.resolve();
+
+// Common site-module interface: login(credentials) -> Promise<{ cookie: string }>
+export function login({ email, password }) {
+  const run = loginQueue.then(() => loginWithRetries({ email, password }));
+  loginQueue = run.catch(() => {});
+  return run;
+}
+
 async function attemptLogin({ email, password }) {
-  stepLog("Launching headless Chromium...");
-  const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({
+  stepLog(`Launching headless Chromium with persistent profile at ${PROFILE_DIR}...`);
+  mkdirSync(PROFILE_DIR, { recursive: true });
+  const context = await chromium.launchPersistentContext(PROFILE_DIR, {
+    headless: true,
     locale: "uk-UA",
     userAgent:
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36",
@@ -217,6 +241,6 @@ async function attemptLogin({ email, password }) {
   } catch (err) {
     throw await saveFailureArtifacts(page, err);
   } finally {
-    await browser.close();
+    await context.close();
   }
 }

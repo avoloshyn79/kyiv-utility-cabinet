@@ -99,10 +99,17 @@ presents one instead of accepting the click, and it does not patch the
 browser to hide that it's automation-controlled.
 
 Whether the plain click is accepted seems to depend on signals outside the
-add-on's control - network/IP reputation and account history - so it may
+add-on's control - network/IP reputation and browser history - so it may
 behave differently on your Home Assistant network than in a normal browser
-on your own computer. If the add-on's log shows a "reCAPTCHA presented an
-additional challenge" error:
+on your own computer. To help, the add-on uses a **persistent** Chromium
+profile under `/data/kyivvodokanal-chrome-profile` instead of a throwaway
+one per login, so Google's own cookies accumulate across logins the same
+way they would in a real browser you keep reusing, rather than every login
+looking like a brand-new device. This is not guaranteed to be enough on its
+own - tested locally from a datacenter network, it was still challenged
+even on a second login reusing the same profile - but it should only help,
+and matters most over real, longer-term use on your actual network. If the
+add-on's log shows a "reCAPTCHA presented an additional challenge" error:
 
 - It isn't retried automatically (retrying the same challenge immediately
   won't change the outcome).
