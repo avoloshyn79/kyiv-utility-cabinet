@@ -43,9 +43,15 @@ available for on-demand logins from your own automations.
 | Site | Scheduled MQTT polling | Manual `/fetch/<site>` |
 |---|---|---|
 | YASNO (electricity) | ✅ | ✅ |
-| Kyivvodokanal (water) | Planned | Planned |
+| Kyivvodokanal (water) | ✅ | ✅ |
 | Kyivteploenergo (heating) | Planned | Planned |
 | Kyivgaz (gas) | Planned | Planned |
+
+Kyivvodokanal's login page has a Google reCAPTCHA v2 checkbox. The add-on
+clicks it like a real user would and does not attempt to solve a
+harder challenge if Google presents one - see
+[`kyiv_utility_cabinet/DOCS.md`](kyiv_utility_cabinet/DOCS.md#kyivvodokanal-and-recaptcha)
+for what that means in practice.
 
 Adding a site is two new modules under
 [`kyiv_utility_cabinet/src/sites/`](kyiv_utility_cabinet/src/sites/) (login +

@@ -12,7 +12,18 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { login as yasnoLogin } from "./sites/yasno.mjs";
 import { fetchAccountData, submitMeterReadings, YasnoAuthError } from "./sites/yasno-data.mjs";
-import { publishYasnoData, publishYasnoSubmitButton } from "./mqtt-publish.mjs";
+import { login as kyivvodokanalLogin } from "./sites/kyivvodokanal.mjs";
+import {
+  fetchAccountData as fetchKyivvodokanalData,
+  submitReadings as submitKyivvodokanalReadings,
+  KyivvodokanalAuthError,
+} from "./sites/kyivvodokanal-data.mjs";
+import {
+  publishYasnoData,
+  publishYasnoSubmitButton,
+  publishKyivvodokanalData,
+  publishKyivvodokanalSubmitButton,
+} from "./mqtt-publish.mjs";
 import { getEntityStateAsNumber } from "./ha-api.mjs";
 import { log, debugLog } from "./logger.mjs";
 
@@ -180,6 +191,140 @@ async function checkAndSubmitYasnoReading(config, state) {
   await submitYasnoReadingNow(config, state, "scheduled");
 }
 
+// --- Kyivvodokanal --------------------------------------------------------
+// Same overall shape as YASNO above; the differences are the login module
+// (email/password, and a reCAPTCHA click that may or may not be accepted -
+// see kyivvodokanal.mjs) and the submitted readings, which are per-counter
+// (hot/cold water) rather than per-tariff-zone.
+
+async function ensureKyivvodokanalLoggedIn(config, state) {
+  if (state.cookie) return state.cookie;
+  if (!state.loginPromise) {
+    log("kyivvodokanal", "Logging in...");
+    state.loginPromise = kyivvodokanalLogin({ email: config.email, password: config.password })
+      .then(({ cookie }) => {
+        state.cookie = cookie;
+        log("kyivvodokanal", "Login OK.");
+        return cookie;
+      })
+      .finally(() => {
+        state.loginPromise = null;
+      });
+  }
+  return state.loginPromise;
+}
+
+async function pollKyivvodokanal(mqttClient, config, state) {
+  try {
+    await ensureKyivvodokanalLoggedIn(config, state);
+
+    let data;
+    try {
+      data = await fetchKyivvodokanalData(state.cookie);
+    } catch (err) {
+      if (!(err instanceof KyivvodokanalAuthError)) throw err;
+      log("kyivvodokanal", "Session expired, re-logging in...");
+      const { cookie } = await kyivvodokanalLogin({ email: config.email, password: config.password });
+      state.cookie = cookie;
+      data = await fetchKyivvodokanalData(state.cookie);
+    }
+
+    state.lastData = data;
+    publishKyivvodokanalData(mqttClient, {
+      discoveryPrefix: config.discoveryPrefix,
+      deviceId: "kyivvodokanal_cabinet",
+      deviceName: "Kyivvodokanal Cabinet",
+      data,
+    });
+    log("kyivvodokanal", `Published. Debt=${data.debt} AmountToPay=${data.amount_to_pay}`);
+  } catch (err) {
+    log("kyivvodokanal", `FAILED: ${err.message}`);
+  }
+}
+
+// Builds the readings payload from whichever of entity_hot/entity_cold is
+// configured, matched against the counter IDs this account actually has
+// (discovered from the last data fetch) - not every account has both.
+async function buildKyivvodokanalReadings(submitConfig, counterIdByType) {
+  const readings = [];
+
+  if (submitConfig.entityHot) {
+    const counterId = counterIdByType?.hot_water;
+    if (counterId == null) {
+      throw new Error("entity_hot is configured but no hot water counter was found on this account");
+    }
+    readings.push({ counterId, factor: await getEntityStateAsNumber(submitConfig.entityHot) });
+  }
+  if (submitConfig.entityCold) {
+    const counterId = counterIdByType?.cold_water;
+    if (counterId == null) {
+      throw new Error("entity_cold is configured but no cold water counter was found on this account");
+    }
+    readings.push({ counterId, factor: await getEntityStateAsNumber(submitConfig.entityCold) });
+  }
+  if (readings.length === 0) {
+    throw new Error("Neither entity_hot nor entity_cold is configured - nothing to submit");
+  }
+  return readings;
+}
+
+async function submitKyivvodokanalReadingNow(config, state, trigger) {
+  if (state.submitInProgress) {
+    log("kyivvodokanal", `[${trigger}] Meter reading submission already in progress, ignoring this request.`);
+    return;
+  }
+  state.submitInProgress = true;
+  const yearMonth = currentYearMonth(new Date());
+
+  try {
+    const submitConfig = config.submitReadings;
+    await ensureKyivvodokanalLoggedIn(config, state);
+    if (!state.lastData) {
+      state.lastData = await fetchKyivvodokanalData(state.cookie);
+    }
+
+    const readings = await buildKyivvodokanalReadings(submitConfig, state.lastData.counter_id_by_type);
+
+    log("kyivvodokanal", `[${trigger}] Submitting meter reading(s) for ${yearMonth}: ${JSON.stringify(readings)}`);
+    await submitKyivvodokanalReadings(state.cookie, readings);
+    log("kyivvodokanal", `[${trigger}] Meter reading submitted for ${yearMonth}.`);
+
+    if (trigger === "scheduled") {
+      const submissionState = loadSubmissionState();
+      submissionState.kyivvodokanalScheduled = { yearMonth, submittedAt: new Date().toISOString() };
+      saveSubmissionState(submissionState);
+    }
+  } catch (err) {
+    if (err instanceof KyivvodokanalAuthError) {
+      state.cookie = "";
+    }
+    log("kyivvodokanal", `[${trigger}] Meter reading submission FAILED: ${err.message}`);
+  } finally {
+    state.submitInProgress = false;
+  }
+}
+
+async function checkAndSubmitKyivvodokanalReading(config, state) {
+  const submitConfig = config.submitReadings;
+  if (!submitConfig?.enabled) return;
+
+  const now = new Date();
+  if (now.getDate() !== submitConfig.dayOfMonth) return;
+
+  const yearMonth = currentYearMonth(now);
+  const submissionState = loadSubmissionState();
+  const already = submissionState.kyivvodokanalScheduled;
+  if (already?.yearMonth === yearMonth) {
+    debugLog(
+      "kyivvodokanal",
+      `Scheduled submission for ${yearMonth} skipped - already submitted automatically at ${already.submittedAt}.`
+    );
+    return;
+  }
+
+  await submitKyivvodokanalReadingNow(config, state, "scheduled");
+}
+
 /**
  * @param {import('mqtt').MqttClient} mqttClient
  * @param {object} options - the add-on's /data/options.json contents
@@ -239,6 +384,51 @@ export function startScheduler(mqttClient, options) {
     }
   }
 
-  // Future services (Kyivvodokanal, Kyivteploenergo, Kyivgaz) plug in here
-  // the same way, once their site modules exist under ./sites/.
+  if (options.kyivvodokanal?.enabled) {
+    const submit = options.kyivvodokanal.submit_readings || {};
+    const config = {
+      email: options.kyivvodokanal.email,
+      password: options.kyivvodokanal.password,
+      discoveryPrefix,
+      submitReadings: {
+        enabled: Boolean(submit.enabled),
+        dayOfMonth: Number(submit.day_of_month) || 26,
+        entityHot: submit.entity_hot || "",
+        entityCold: submit.entity_cold || "",
+      },
+    };
+    const state = { cookie: "", lastData: null, submitInProgress: false };
+    const intervalMs = Math.max(5, Number(options.kyivvodokanal.interval_minutes) || 1440) * 60 * 1000;
+
+    log("kyivvodokanal", `Scheduler starting, polling every ${intervalMs / 60000} minute(s).`);
+    pollKyivvodokanal(mqttClient, config, state);
+    setInterval(() => pollKyivvodokanal(mqttClient, config, state), intervalMs);
+
+    if (config.submitReadings.enabled) {
+      log("kyivvodokanal", `Meter reading submission enabled: day ${config.submitReadings.dayOfMonth} of each month.`);
+      checkAndSubmitKyivvodokanalReading(config, state);
+      setInterval(() => checkAndSubmitKyivvodokanalReading(config, state), SUBMISSION_CHECK_INTERVAL_MS);
+    }
+
+    const hasReadingEntities = Boolean(config.submitReadings.entityHot || config.submitReadings.entityCold);
+    if (hasReadingEntities) {
+      const commandTopic = publishKyivvodokanalSubmitButton(mqttClient, {
+        discoveryPrefix,
+        deviceId: "kyivvodokanal_cabinet",
+        deviceName: "Kyivvodokanal Cabinet",
+      });
+      mqttClient.subscribe(commandTopic, (err) => {
+        if (err) log("kyivvodokanal", `Could not subscribe to ${commandTopic}: ${err.message}`);
+      });
+      mqttClient.on("message", (topic) => {
+        if (topic !== commandTopic) return;
+        log("kyivvodokanal", "Manual meter reading submission requested via button.");
+        submitKyivvodokanalReadingNow(config, state, "manual");
+      });
+      log("kyivvodokanal", "Manual 'Submit water readings now' button published.");
+    }
+  }
+
+  // Future services (Kyivteploenergo, Kyivgaz) plug in here the same way,
+  // once their site modules exist under ./sites/.
 }

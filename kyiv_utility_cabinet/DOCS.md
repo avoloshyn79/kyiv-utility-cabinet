@@ -16,7 +16,7 @@ automations.
 | Site | Scheduled MQTT polling | Manual `/fetch/<site>` |
 |---|---|---|
 | YASNO (electricity) | ✅ | ✅ `/fetch/yasno` |
-| Kyivvodokanal (water) | Planned | Planned |
+| Kyivvodokanal (water) | ✅ | ✅ `/fetch/kyivvodokanal` |
 | Kyivteploenergo (heating) | Planned | Planned |
 | Kyivgaz (gas) | Planned | Planned |
 
@@ -36,6 +36,12 @@ automations.
 | `yasno.submit_readings.meter_type` | `auto` (default, matches your actual meter from the last reading YASNO already has), `single`, or `day_night` — override only if auto-detection picks the wrong one. |
 | `yasno.submit_readings.entity_single` | Home Assistant entity ID holding the current total meter reading (single-zone meters). |
 | `yasno.submit_readings.entity_day` / `entity_night` | Home Assistant entity IDs holding the current day/night meter readings (two-zone meters). |
+| `kyivvodokanal.enabled` | Turn on scheduled polling + MQTT publishing for Kyivvodokanal. |
+| `kyivvodokanal.email` / `kyivvodokanal.password` | Kyivvodokanal personal cabinet login (`my.vodokanal.kiev.ua`). |
+| `kyivvodokanal.interval_minutes` | How often to log in and refresh (default 1440 = once a day). |
+| `kyivvodokanal.submit_readings.enabled` | Turn on automatic monthly meter reading submission to Kyivvodokanal. |
+| `kyivvodokanal.submit_readings.day_of_month` | Day of the month to submit on (default 26). Checked once an hour. |
+| `kyivvodokanal.submit_readings.entity_hot` / `entity_cold` | Home Assistant entity IDs holding the current hot/cold water meter readings. Fill in whichever you actually have a counter for - most accounts have cold only, some have both. |
 
 If your YASNO profile has more than one account, the first B2C account is
 used automatically (no option to pick a different one yet).
@@ -84,11 +90,57 @@ you like (e.g. to double-check a reading, or to correct one you already
 sent by hand outside the app), and the automatic submission will still run
 on its configured day regardless of any manual presses that month.
 
+## Kyivvodokanal and reCAPTCHA
+
+Kyivvodokanal's login page (`my.vodokanal.kiev.ua/sign-in`) has a Google
+reCAPTCHA v2 checkbox. The add-on clicks it once, exactly like a real user
+would - it does **not** attempt to solve an image/audio challenge if Google
+presents one instead of accepting the click, and it does not patch the
+browser to hide that it's automation-controlled.
+
+Whether the plain click is accepted seems to depend on signals outside the
+add-on's control - network/IP reputation and account history - so it may
+behave differently on your Home Assistant network than in a normal browser
+on your own computer. If the add-on's log shows a "reCAPTCHA presented an
+additional challenge" error:
+
+- It isn't retried automatically (retrying the same challenge immediately
+  won't change the outcome).
+- A screenshot/HTML snapshot is saved to `/data/debug/`, same as any other
+  login failure - see [Debugging a failed login](#debugging-a-failed-login).
+- There's currently no manual-cookie fallback built into this add-on for
+  Kyivvodokanal; if automated login doesn't work reliably from your network,
+  the separate
+  [ha-kyivvodokanal-cabinet](https://github.com/avoloshyn79/ha-kyivvodokanal-cabinet)
+  integration (manual cookie paste) remains an option.
+
+Everything else about Kyivvodokanal - scheduled polling, MQTT sensors,
+meter reading submission, the manual button, `debug` logging - works the
+same way as YASNO, described above and below.
+
+### Kyivvodokanal meter reading submission
+
+Same mechanics as YASNO's (guaranteed once a month via the schedule, the
+manual button is unrestricted and doesn't interact with that guarantee,
+every attempt is logged with a `[scheduled]`/`[manual]` tag), with one
+difference: instead of a single/day-night tariff split, readings are
+per-counter. Fill in `entity_hot` and/or `entity_cold` depending on which
+water meters you actually have; the add-on matches each to the
+corresponding counter ID it already discovered from your account (there's
+no need to look up or configure counter IDs yourself). If you fill in
+`entity_hot` but your account has no hot water counter, the submission
+fails with a clear error rather than guessing.
+
 ## What gets created in Home Assistant
 
 With `yasno.enabled: true`, a **YASNO Cabinet** device appears automatically
 (via MQTT discovery) with sensors for balance, debt, consumption, tariffs,
 meter readings, last payment, and account number — no manual entity setup.
+
+With `kyivvodokanal.enabled: true`, a **Kyivvodokanal Cabinet** device
+appears the same way, with sensors for debt, amount to pay, tariffs
+(cold water/sewerage/subscription fee), hot/cold water meter numbers,
+check dates, last readings, and last submitted dates.
 
 ## Manual HTTP API
 
@@ -104,25 +156,43 @@ Body:
 Response (200): `{ "cookie": "visid_incap_...; other=..." }`
 Response (502) on login failure: `{ "error": "..." }`
 
+### `POST /fetch/kyivvodokanal`
+
+Headers: `X-Api-Key: <api_key>` (if configured), `Content-Type: application/json`
+
+Body:
+```json
+{ "email": "you@example.com", "password": "..." }
+```
+
+Response (200): `{ "cookie": "JSESSIONID=...; XSRF-TOKEN=...; ..." }`
+Response (502): `{ "error": "..." }` - includes the reCAPTCHA challenge error
+described in [Kyivvodokanal and reCAPTCHA](#kyivvodokanal-and-recaptcha) if
+that's what happened.
+
 ### `GET /health`
 
-Returns `{ "ok": true, "sites": ["yasno"] }` — use this to confirm the add-on
-is reachable before troubleshooting further:
+Returns `{ "ok": true, "sites": ["yasno", "kyivvodokanal"] }` — use this to
+confirm the add-on is reachable before troubleshooting further:
 ```
 curl http://kyiv_utility_cabinet:8099/health
 ```
 
 ### Debugging a failed login
 
-If a login fails (timeout, unexpected page), the add-on saves what it was
-looking at to `/data/debug/` and the log message points you to these
-endpoints (same `X-Api-Key` as above if configured):
+If a login fails (timeout, unexpected page, reCAPTCHA challenge), the
+add-on saves what it was looking at to `/data/debug/` and the log message
+points you to these endpoints (same `X-Api-Key` as above if configured;
+replace `yasno` with `kyivvodokanal` for that site):
 
 | Endpoint | Contents |
 |---|---|
 | `GET /debug/yasno/screenshot` | Full-page PNG of the browser at the moment it failed |
 | `GET /debug/yasno/html` | The page's HTML at that moment |
 | `GET /debug/yasno/info` | Plain text: timestamp, URL, page title, error message |
+| `GET /debug/kyivvodokanal/screenshot` | Same, for the Kyivvodokanal login |
+| `GET /debug/kyivvodokanal/html` | Same, for the Kyivvodokanal login |
+| `GET /debug/kyivvodokanal/info` | Same, for the Kyivvodokanal login |
 
 ## Notes
 
@@ -132,8 +202,9 @@ endpoints (same `X-Api-Key` as above if configured):
 - A login is retried automatically up to 3 times on a transient failure
   (e.g. the login page's JS bundle failing to load, which happens
   occasionally even in a real browser). If YASNO itself rejects the phone
-  number or password, the add-on log says so directly and does **not**
-  retry - fix the credentials in the add-on configuration instead.
+  number or password, or Kyivvodokanal's reCAPTCHA challenges the attempt,
+  the add-on log says so directly and does **not** retry - retrying either
+  of those immediately won't change the outcome.
 - If a site changes its login page's structure, that site's module may need
   updating — check the add-on log for the failure point.
 - The `debt` sensor currently always reads 0 — a known upstream issue (it

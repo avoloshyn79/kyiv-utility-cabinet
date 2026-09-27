@@ -1,5 +1,32 @@
 # Changelog
 
+## 2.6.0
+
+- Added Kyivvodokanal support: scheduled login + MQTT publishing
+  (`kyivvodokanal.enabled`), the manual `POST /fetch/kyivvodokanal` API, and
+  automatic/manual meter reading submission - the same feature set YASNO
+  already had, ported from the `ha-kyivvodokanal-cabinet` integration's
+  `api.py`/`coordinator.py` (payments, debt/amount-to-pay, tariffs,
+  counters, meter readings, submission) onto this add-on's login-and-MQTT
+  architecture.
+- Kyivvodokanal's login page (`my.vodokanal.kiev.ua/sign-in`) has a Google
+  reCAPTCHA v2 checkbox, unlike YASNO. The add-on clicks it once like a
+  real user and does not attempt to solve a harder challenge if Google
+  presents one - confirmed locally that a plain automated click gets
+  challenged from this environment's network; whether it's accepted from a
+  given Home Assistant install may depend on that network's reputation
+  with Google. A challenge fails fast (no retry) with a clear log message
+  and the usual `/data/debug/` snapshot. See DOCS.md's "Kyivvodokanal and
+  reCAPTCHA" section.
+- Meter reading submission for Kyivvodokanal is per-counter
+  (`entity_hot`/`entity_cold`) rather than per-tariff-zone: each configured
+  entity is matched to the hot/cold water counter ID discovered from the
+  account, with a clear error if an entity is configured for a counter type
+  the account doesn't actually have.
+- Refactored `mqtt-publish.mjs`'s sensor/button publishing into shared
+  helpers used by both YASNO and Kyivvodokanal, instead of duplicating the
+  MQTT discovery mechanics per site.
+
 ## 2.5.1
 
 - Separated the once-per-month guard from the manual button: the

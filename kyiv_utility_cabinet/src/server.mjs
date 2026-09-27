@@ -7,19 +7,25 @@
 import { createServer } from "node:http";
 import { readFileSync, statSync } from "node:fs";
 import { login as yasnoLogin } from "./sites/yasno.mjs";
+import { login as kyivvodokanalLogin } from "./sites/kyivvodokanal.mjs";
 
 const PORT = 8099;
 const DEBUG_DIR = "/data/debug";
 
 const SITES = {
   yasno: yasnoLogin,
+  kyivvodokanal: kyivvodokanalLogin,
 };
 
-const DEBUG_FILES = {
-  "/debug/yasno/screenshot": { file: `${DEBUG_DIR}/yasno-last-failure.png`, contentType: "image/png" },
-  "/debug/yasno/html": { file: `${DEBUG_DIR}/yasno-last-failure.html`, contentType: "text/html; charset=utf-8" },
-  "/debug/yasno/info": { file: `${DEBUG_DIR}/yasno-last-failure.txt`, contentType: "text/plain; charset=utf-8" },
-};
+function debugFilesFor(site) {
+  return {
+    [`/debug/${site}/screenshot`]: { file: `${DEBUG_DIR}/${site}-last-failure.png`, contentType: "image/png" },
+    [`/debug/${site}/html`]: { file: `${DEBUG_DIR}/${site}-last-failure.html`, contentType: "text/html; charset=utf-8" },
+    [`/debug/${site}/info`]: { file: `${DEBUG_DIR}/${site}-last-failure.txt`, contentType: "text/plain; charset=utf-8" },
+  };
+}
+
+const DEBUG_FILES = { ...debugFilesFor("yasno"), ...debugFilesFor("kyivvodokanal") };
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] [http] ${message}`);
