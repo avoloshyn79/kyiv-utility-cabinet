@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.6.2
+
+- Added `tools/setup-kyivvodokanal-profile.mjs`: a local, one-time script
+  that opens a real (visible, non-headless) Chromium window using a
+  persistent profile, so you can sign into your own Google account - and
+  Kyivvodokanal itself - as a real person. Copying the resulting profile
+  folder onto the add-on's `/data/kyivvodokanal-chrome-profile` gives its
+  headless logins an already-signed-in Google session to reuse, which is a
+  much stronger positive signal to reCAPTCHA than cookie persistence alone.
+  Deliberately does not automate the Google sign-in itself - Google's own
+  bot defenses and 2FA make that both risky and often impossible, so this
+  step has to be genuinely done by a human, once. Documented in DOCS.md.
+
 ## 2.6.1
 
 - Kyivvodokanal now logs in with a persistent Chromium profile

@@ -121,6 +121,41 @@ add-on's log shows a "reCAPTCHA presented an additional challenge" error:
   [ha-kyivvodokanal-cabinet](https://github.com/avoloshyn79/ha-kyivvodokanal-cabinet)
   integration (manual cookie paste) remains an option.
 
+### Improving the odds: sign into Google once, for real
+
+A browser profile with an actual signed-in Google session is one of the
+strongest positive signals reCAPTCHA looks at - much stronger than cookie
+persistence alone. The add-on can't establish that itself (Google's own
+sign-in has strong bot defenses of its own; automating a real login into it
+risks the account getting flagged, and breaks outright with 2FA), so this
+has to be a real, one-time human action:
+
+1. On your own computer, from inside a checkout of this repo's
+   `kyiv_utility_cabinet/` folder (with `npm install` and
+   `npx playwright install chromium` already run - the same setup used for
+   local testing), run:
+   ```
+   node tools/setup-kyivvodokanal-profile.mjs
+   ```
+2. A real, visible Chromium window opens. Log into your Google account
+   normally, then go to `https://my.vodokanal.kiev.ua/sign-in` and log in
+   there too (solving the captcha as usual - it's just you, in a real
+   browser).
+3. Close the window. The script prints the profile folder it saved
+   (defaults to somewhere under your OS temp directory).
+4. Copy that **whole folder** onto the add-on's persistent storage (e.g.
+   via the Samba share or SSH & Web Terminal add-ons) to exactly:
+   ```
+   /data/kyivvodokanal-chrome-profile
+   ```
+   replacing whatever the add-on already created there.
+5. Restart the add-on - its headless logins now reuse that already
+   signed-in profile instead of a cookie-less one.
+
+This is not guaranteed to eliminate the challenge (the add-on's browser is
+still CDP-automated, which is its own signal), but it removes one of the
+biggest gaps between it and a real browser session.
+
 Everything else about Kyivvodokanal - scheduled polling, MQTT sensors,
 meter reading submission, the manual button, `debug` logging - works the
 same way as YASNO, described above and below.
