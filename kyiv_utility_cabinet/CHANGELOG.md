@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.5.1
+
+- Separated the once-per-month guard from the manual button: the
+  once-a-month record is now only ever written and checked by the
+  automatic schedule (`submissionState.yasnoScheduled`), so pressing
+  **Submit meter reading now** no longer blocks that month's scheduled
+  submission, and the scheduled submission no longer refuses to run just
+  because the button was pressed earlier that month. The button stays
+  completely unrestricted; the schedule still guarantees exactly one
+  automatic submission per month.
+
 ## 2.5.0
 
 - Added a `debug` option (off by default). On, it brings back the full

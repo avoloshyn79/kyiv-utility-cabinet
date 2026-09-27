@@ -111,11 +111,12 @@ async function buildMeteringReadings(submitConfig, isDayNight, zoneNames) {
   return [{ zone: zoneNames?.alltime || "Alltime", value }];
 }
 
-// Does the actual login + read-entities + submit work, then records the
-// month as done - shared by the scheduled day-of-month check and the manual
-// "Submit meter reading now" MQTT button, so whichever one runs first each
-// month blocks the other for the rest of it. `trigger` ("scheduled" or
-// "manual") is only for logging/audit - it doesn't change the behavior.
+// Does the actual login + read-entities + submit work. Only a "scheduled"
+// trigger records the month as done - the manual "Submit meter reading now"
+// button is a separate, unlimited action: it neither checks nor writes that
+// record, so it never blocks (or gets blocked by) the automatic monthly
+// submission. `submitInProgress` still applies to both, purely to stop two
+// submissions from literally overlapping if they land at the same instant.
 async function submitYasnoReadingNow(config, state, trigger) {
   if (state.submitInProgress) {
     log("yasno", `[${trigger}] Meter reading submission already in progress, ignoring this request.`);
@@ -138,9 +139,11 @@ async function submitYasnoReadingNow(config, state, trigger) {
     await submitMeterReadings(state.cookie, state.lastData.account_id, readings);
     log("yasno", `[${trigger}] Meter reading submitted for ${yearMonth}.`);
 
-    const submissionState = loadSubmissionState();
-    submissionState.yasno = { yearMonth, trigger, submittedAt: new Date().toISOString() };
-    saveSubmissionState(submissionState);
+    if (trigger === "scheduled") {
+      const submissionState = loadSubmissionState();
+      submissionState.yasnoScheduled = { yearMonth, submittedAt: new Date().toISOString() };
+      saveSubmissionState(submissionState);
+    }
   } catch (err) {
     if (err instanceof YasnoAuthError) {
       state.cookie = "";
@@ -152,11 +155,10 @@ async function submitYasnoReadingNow(config, state, trigger) {
 }
 
 // Guarantees the automatic path fires at most once per calendar month: it
-// only runs on the configured day, and only if the persisted record (shared
-// with the manual button - see submitYasnoReadingNow) doesn't already show
-// this month as done, however it got done. Re-checked fresh from disk on
-// every hourly tick so a manual submission earlier the same month is picked
-// up immediately, even across an add-on restart.
+// only runs on the configured day, and only if it hasn't already recorded
+// this month as done itself - a manual button press is a separate action
+// and never counts here. Re-checked fresh from disk on every hourly tick so
+// this survives an add-on restart without risking a second submission.
 async function checkAndSubmitYasnoReading(config, state) {
   const submitConfig = config.submitReadings;
   if (!submitConfig?.enabled) return;
@@ -166,16 +168,11 @@ async function checkAndSubmitYasnoReading(config, state) {
 
   const yearMonth = currentYearMonth(now);
   const submissionState = loadSubmissionState();
-  const already = submissionState.yasno;
-  // `already` is an object as of 2.5.0; a plain year-month string means the
-  // marker was written by an older version - either way, compare the month.
-  const alreadyYearMonth = typeof already === "string" ? already : already?.yearMonth;
-  if (alreadyYearMonth === yearMonth) {
+  const already = submissionState.yasnoScheduled;
+  if (already?.yearMonth === yearMonth) {
     debugLog(
       "yasno",
-      typeof already === "string"
-        ? `Scheduled submission for ${yearMonth} skipped - already submitted earlier.`
-        : `Scheduled submission for ${yearMonth} skipped - already submitted (trigger=${already.trigger} at ${already.submittedAt}).`
+      `Scheduled submission for ${yearMonth} skipped - already submitted automatically at ${already.submittedAt}.`
     );
     return;
   }

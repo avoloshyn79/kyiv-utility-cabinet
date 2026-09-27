@@ -56,12 +56,13 @@ them to YASNO once, on the configured day of the month.
   `entity_day` and `entity_night` for a two-zone one — typically a utility
   meter or template sensor you already have in Home Assistant tracking your
   actual meter's dial/display.
-- **Guaranteed once per month, never more**: whichever happens first each
-  month - the scheduled day arriving, or you pressing the manual button
-  below - is recorded to `/data/` and blocks the other for the rest of that
-  month, even across add-on restarts. A failed attempt (e.g. an entity is
+- **Guaranteed once per month, never more**: a successful automatic
+  submission is recorded to `/data/`, so it won't repeat again that month
+  even across add-on restarts. A failed attempt (e.g. an entity is
   unavailable that hour) isn't recorded, so the scheduled check keeps
-  retrying hourly until it succeeds or the month rolls over.
+  retrying hourly until it succeeds or the month rolls over. This applies
+  only to the automatic schedule - see below for the manual button, which
+  is unrestricted.
 - The zone labels sent to YASNO (`"Day"`/`"Night"`/`"Alltime"`) are taken
   from your account's own last reading when available, so the payload
   matches whatever YASNO itself calls each zone rather than a guess.
@@ -75,10 +76,13 @@ them to YASNO once, on the configured day of the month.
 If at least one of `entity_single`/`entity_day`/`entity_night` is filled
 in, a **Submit meter reading now** button also appears on the YASNO Cabinet
 device in Home Assistant. Pressing it submits immediately using the current
-entity values, ignoring the configured day of the month - useful for
-testing, or for submitting once outside the usual schedule. It uses the
-same auto-detected meter type and still records the month as done, so the
-scheduled check won't submit again automatically afterwards.
+entity values, using the same auto-detected meter type as the schedule.
+
+The button is **not** limited to once a month and doesn't interact with the
+automatic schedule's once-a-month record at all - press it as many times as
+you like (e.g. to double-check a reading, or to correct one you already
+sent by hand outside the app), and the automatic submission will still run
+on its configured day regardless of any manual presses that month.
 
 ## What gets created in Home Assistant
 
