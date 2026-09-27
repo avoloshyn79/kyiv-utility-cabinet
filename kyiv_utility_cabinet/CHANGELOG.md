@@ -1,5 +1,18 @@
 # Changelog
 
+## 2.4.0
+
+- Added a **Submit meter reading now** button (via MQTT discovery, on the
+  YASNO Cabinet device) for on-demand meter reading submission - shares the
+  exact same logic as the scheduled monthly submission (auto-detected meter
+  type, zone labels taken from the account's last reading), just triggered
+  immediately instead of waiting for `day_of_month`. Still records the
+  month as submitted afterwards, so the scheduled check doesn't also fire
+  later that month. Only appears once at least one of `entity_single` /
+  `entity_day` / `entity_night` is configured. Concurrent presses (or a
+  press landing on top of the scheduled check) are ignored rather than
+  starting a second submission in parallel.
+
 ## 2.3.0
 
 - Added automatic monthly meter reading submission to YASNO

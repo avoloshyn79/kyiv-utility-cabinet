@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { login as yasnoLogin } from "./sites/yasno.mjs";
 import { fetchAccountData, submitMeterReadings, YasnoAuthError } from "./sites/yasno-data.mjs";
-import { publishYasnoData } from "./mqtt-publish.mjs";
+import { publishYasnoData, publishYasnoSubmitButton } from "./mqtt-publish.mjs";
 import { getEntityStateAsNumber } from "./ha-api.mjs";
 
 const SUBMISSION_STATE_FILE = "/data/kyiv-utility-cabinet-submissions.json";
@@ -114,18 +114,20 @@ async function buildMeteringReadings(submitConfig, isDayNight, zoneNames) {
   return [{ zone: zoneNames?.alltime || "Alltime", value }];
 }
 
-async function checkAndSubmitYasnoReading(config, state) {
-  const submitConfig = config.submitReadings;
-  if (!submitConfig?.enabled) return;
-
-  const now = new Date();
-  if (now.getDate() !== submitConfig.dayOfMonth) return;
-
-  const yearMonth = currentYearMonth(now);
-  const submissionState = loadSubmissionState();
-  if (submissionState.yasno === yearMonth) return;
+// Does the actual login + read-entities + submit work, recording the month
+// so the scheduled check (below) won't also submit again. Shared by the
+// scheduled day-of-month check and the manual "Submit meter reading now"
+// MQTT button - the button ignores the day/once-per-month gating since a
+// press is an explicit request, but still records the month afterwards.
+async function submitYasnoReadingNow(config, state) {
+  if (state.submitInProgress) {
+    log("yasno", "Meter reading submission already in progress, ignoring this request.");
+    return;
+  }
+  state.submitInProgress = true;
 
   try {
+    const submitConfig = config.submitReadings;
     await ensureLoggedIn(config, state);
     if (!state.lastData) {
       state.lastData = await fetchAccountData(state.cookie);
@@ -134,10 +136,12 @@ async function checkAndSubmitYasnoReading(config, state) {
     const isDayNight = resolveMeterIsDayNight(submitConfig, state.lastData);
     const readings = await buildMeteringReadings(submitConfig, isDayNight, state.lastData.meter_reading_zone_names);
 
+    const yearMonth = currentYearMonth(new Date());
     log("yasno", `Submitting meter reading(s) for ${yearMonth}: ${JSON.stringify(readings)}`);
     await submitMeterReadings(state.cookie, state.lastData.account_id, readings);
     log("yasno", "Meter reading submitted.");
 
+    const submissionState = loadSubmissionState();
     submissionState.yasno = yearMonth;
     saveSubmissionState(submissionState);
   } catch (err) {
@@ -145,7 +149,22 @@ async function checkAndSubmitYasnoReading(config, state) {
       state.cookie = "";
     }
     log("yasno", `Meter reading submission FAILED: ${err.message}`);
+  } finally {
+    state.submitInProgress = false;
   }
+}
+
+async function checkAndSubmitYasnoReading(config, state) {
+  const submitConfig = config.submitReadings;
+  if (!submitConfig?.enabled) return;
+
+  const now = new Date();
+  if (now.getDate() !== submitConfig.dayOfMonth) return;
+
+  const submissionState = loadSubmissionState();
+  if (submissionState.yasno === currentYearMonth(now)) return;
+
+  await submitYasnoReadingNow(config, state);
 }
 
 /**
@@ -170,7 +189,7 @@ export function startScheduler(mqttClient, options) {
         entityNight: submit.entity_night || "",
       },
     };
-    const state = { cookie: "", lastData: null };
+    const state = { cookie: "", lastData: null, submitInProgress: false };
     const intervalMs = Math.max(5, Number(options.yasno.interval_minutes) || 1440) * 60 * 1000;
 
     log("yasno", `Scheduler starting, polling every ${intervalMs / 60000} minute(s).`);
@@ -184,6 +203,26 @@ export function startScheduler(mqttClient, options) {
       );
       checkAndSubmitYasnoReading(config, state);
       setInterval(() => checkAndSubmitYasnoReading(config, state), SUBMISSION_CHECK_INTERVAL_MS);
+    }
+
+    const hasReadingEntities = Boolean(
+      config.submitReadings.entitySingle || (config.submitReadings.entityDay && config.submitReadings.entityNight)
+    );
+    if (hasReadingEntities) {
+      const commandTopic = publishYasnoSubmitButton(mqttClient, {
+        discoveryPrefix,
+        deviceId: "yasno_cabinet",
+        deviceName: "YASNO Cabinet",
+      });
+      mqttClient.subscribe(commandTopic, (err) => {
+        if (err) log("yasno", `Could not subscribe to ${commandTopic}: ${err.message}`);
+      });
+      mqttClient.on("message", (topic) => {
+        if (topic !== commandTopic) return;
+        log("yasno", "Manual meter reading submission requested via button.");
+        submitYasnoReadingNow(config, state);
+      });
+      log("yasno", "Manual 'Submit meter reading now' button published.");
     }
   }
 

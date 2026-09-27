@@ -65,6 +65,39 @@ const SENSORS = [
   { key: "account_number", name: "Account number", icon: "mdi:identifier" },
 ];
 
+/**
+ * Publishes a "Submit meter reading now" button via MQTT discovery and
+ * returns the topic it listens on for a press. Manual counterpart to the
+ * scheduled submission in scheduler.mjs - same submit logic, triggered on
+ * demand instead of waiting for the configured day of the month.
+ * @param {import('mqtt').MqttClient} client
+ * @param {{ discoveryPrefix: string, deviceId: string, deviceName: string }} args
+ * @returns {string} the command topic to subscribe to
+ */
+export function publishYasnoSubmitButton(client, { discoveryPrefix, deviceId, deviceName }) {
+  const device = {
+    identifiers: [deviceId],
+    name: deviceName,
+    manufacturer: "YASNO",
+    model: "Personal Cabinet",
+  };
+  const objectId = `${deviceId}_submit_reading`;
+  const configTopic = `${discoveryPrefix}/button/${objectId}/config`;
+  const commandTopic = `${discoveryPrefix}/button/${objectId}/set`;
+
+  const configPayload = {
+    name: "Submit meter reading now",
+    unique_id: objectId,
+    command_topic: commandTopic,
+    payload_press: "PRESS",
+    device,
+    icon: "mdi:upload",
+  };
+  client.publish(configTopic, JSON.stringify(configPayload), { retain: true, qos: 1 });
+
+  return commandTopic;
+}
+
 export function connectMqtt({ host, port, username, password }, onLog) {
   const client = mqtt.connect(`mqtt://${host}:${port}`, {
     username: username || undefined,

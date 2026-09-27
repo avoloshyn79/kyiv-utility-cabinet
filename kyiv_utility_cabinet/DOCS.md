@@ -63,6 +63,16 @@ them to YASNO once, on the configured day of the month.
   from your account's own last reading when available, so the payload
   matches whatever YASNO itself calls each zone rather than a guess.
 
+### Manual submission
+
+If at least one of `entity_single`/`entity_day`/`entity_night` is filled
+in, a **Submit meter reading now** button also appears on the YASNO Cabinet
+device in Home Assistant. Pressing it submits immediately using the current
+entity values, ignoring the configured day of the month - useful for
+testing, or for submitting once outside the usual schedule. It uses the
+same auto-detected meter type and still records the month as done, so the
+scheduled check won't submit again automatically afterwards.
+
 ## What gets created in Home Assistant
 
 With `yasno.enabled: true`, a **YASNO Cabinet** device appears automatically
