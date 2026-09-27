@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2.0
+
+- Detect YASNO's own "невірний телефон або пароль" (invalid phone/password)
+  message directly in the page and fail fast with a clear
+  `YasnoInvalidCredentialsError`, instead of waiting out the full timeout.
+  This case is **not** retried - a wrong password won't fix itself, and
+  hammering the login with retries is unhelpful (and unfriendly to the
+  account). All other failures (e.g. a transient asset-loading hiccup) are
+  still retried up to 3 times as before.
+- Rewrote the redirect-waiting logic as a single polling loop (checks the
+  URL and the page text every 500ms) instead of racing `waitForURL` against
+  a separate heartbeat timer - simpler, and it's what made the error
+  detection above possible without a second parallel wait.
+- Removed the `yasno.account_id` option: it invited confusion between the
+  internal API id and the account number printed on an invoice. The first
+  B2C account is now always auto-selected; picking a specific one can come
+  back later as a real feature once it's needed.
+- Verified end-to-end locally: a correct password logs in and fetches data
+  normally; a wrong password is now reported in ~1s instead of 45s, with no
+  retry.
+
 ## 2.1.0
 
 - Much more detailed logging for the YASNO login flow, all directly in the

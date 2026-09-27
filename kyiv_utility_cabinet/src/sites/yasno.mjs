@@ -11,6 +11,15 @@ import { mkdirSync, writeFileSync } from "node:fs";
 
 const DEBUG_DIR = "/data/debug";
 const HEARTBEAT_MS = 8000;
+const POLL_MS = 500;
+
+export class YasnoInvalidCredentialsError extends Error {}
+
+// Inline messages YASNO's own UI shows without throwing an HTTP error or
+// changing the URL - a plain waitForURL would just time out on these.
+const KNOWN_LOGIN_ERRORS = [
+  { pattern: /введено невірний телефон або пароль/i, message: "Invalid phone number or password" },
+];
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] [yasno:login] ${message}`);
@@ -32,20 +41,61 @@ function attachPageDiagnostics(page) {
   });
 }
 
-// Logs page.url()/title() every HEARTBEAT_MS while `promise` is pending, so
-// a long wait shows up as periodic progress instead of going silent until
-// the final timeout. Returns whatever `promise` resolves/rejects to.
-async function withHeartbeat(page, label, promise) {
-  const timer = setInterval(() => {
-    page
-      .title()
-      .catch(() => "(unavailable)")
-      .then((title) => log(`still waiting (${label})... url=${page.url()} title="${title}"`));
-  }, HEARTBEAT_MS);
-  try {
-    return await promise;
-  } finally {
-    clearInterval(timer);
+async function bodyText(page) {
+  return page
+    .evaluate(() => document.body?.innerText?.replace(/\s+/g, " ").trim() ?? "")
+    .catch(() => "");
+}
+
+async function visibleFields(page) {
+  const selectors = {
+    username: "input[name='username']",
+    password: "input[name='password']",
+    verificationCode: "input[name='verificationCode']",
+  };
+  const found = [];
+  for (const [name, selector] of Object.entries(selectors)) {
+    const isVisible = await page
+      .locator(selector)
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (isVisible) found.push(name);
+  }
+  return found;
+}
+
+// Polls for one of three outcomes instead of relying on waitForURL alone:
+// - the URL matches successPattern -> resolves
+// - a known inline error message appears in the page text -> throws
+//   YasnoInvalidCredentialsError immediately, no point waiting out the timeout
+// - neither happens within timeoutMs -> throws a generic timeout error
+// Logs a heartbeat (url/title/visible text) every HEARTBEAT_MS while waiting.
+async function waitForOutcome(page, { successPattern, timeoutMs, label }) {
+  const deadline = Date.now() + timeoutMs;
+  let lastHeartbeatAt = 0;
+
+  while (true) {
+    if (successPattern.test(page.url())) return;
+
+    const text = await bodyText(page);
+    for (const { pattern, message } of KNOWN_LOGIN_ERRORS) {
+      if (pattern.test(text)) {
+        throw new YasnoInvalidCredentialsError(`YASNO rejected the login: ${message}`);
+      }
+    }
+
+    if (Date.now() >= deadline) {
+      throw new Error(`Timeout waiting for ${label}`);
+    }
+
+    if (Date.now() - lastHeartbeatAt > HEARTBEAT_MS) {
+      lastHeartbeatAt = Date.now();
+      const title = await page.title().catch(() => "(unavailable)");
+      log(`still waiting (${label})... url=${page.url()} title="${title}" text="${text.slice(0, 150)}"`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
   }
 }
 
@@ -87,13 +137,10 @@ async function saveFailureArtifacts(page, err) {
       log("No known bot-protection markers found in HTML.");
     }
 
-    let bodyText = "";
-    try {
-      bodyText = await page.evaluate(() => document.body?.innerText?.slice(0, 500) ?? "");
-    } catch {
-      // ignore
-    }
-    log(`Visible body text (first 500 chars): ${JSON.stringify(bodyText)}`);
+    const fields = await visibleFields(page);
+    const text = await bodyText(page);
+    log(`Visible fields: [${fields.join(", ")}]`);
+    log(`Visible body text (first 250 chars): ${JSON.stringify(text.slice(0, 250))}`);
   } else {
     log("Page HTML was empty or unreadable.");
   }
@@ -116,8 +163,32 @@ async function saveFailureArtifacts(page, err) {
   return err;
 }
 
+const MAX_ATTEMPTS = 3;
+const RETRY_DELAY_MS = 5000;
+
 // Common site-module interface: login(credentials) -> Promise<{ cookie: string }>
 export async function login({ phone, password }) {
+  let lastErr;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (attempt > 1) {
+      log(`Retrying login (attempt ${attempt}/${MAX_ATTEMPTS}) after a transient failure...`);
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    }
+    try {
+      return await attemptLogin({ phone, password });
+    } catch (err) {
+      lastErr = err;
+      log(`Attempt ${attempt}/${MAX_ATTEMPTS} failed: ${err.message}`);
+      if (err instanceof YasnoInvalidCredentialsError) {
+        log("Not retrying: YASNO rejected the phone/password itself, a retry won't change that.");
+        break;
+      }
+    }
+  }
+  throw lastErr;
+}
+
+async function attemptLogin({ phone, password }) {
   log("Launching headless Chromium...");
   const browser = await chromium.launch({ headless: true });
   log(`Chromium launched. Version: ${browser.version()}`);
@@ -134,15 +205,12 @@ export async function login({ phone, password }) {
     const response = await page.goto("https://yasno.ua/my/", { waitUntil: "domcontentloaded", timeout: 60000 });
     log(`Navigation done: HTTP ${response?.status() ?? "?"}, url=${page.url()}`);
 
-    // waitUntil defaults to "load" (all resources), which a heavy SPA can
-    // miss on slow hardware even though the redirect itself already
-    // happened - "commit" only waits for the URL to actually change.
     log("Waiting for client-side redirect to login.yasno.ua...");
-    await withHeartbeat(
-      page,
-      "redirect to login.yasno.ua",
-      page.waitForURL(/login\.yasno\.ua/, { timeout: 45000, waitUntil: "commit" })
-    );
+    await waitForOutcome(page, {
+      successPattern: /login\.yasno\.ua/,
+      timeoutMs: 45000,
+      label: "redirect to login.yasno.ua",
+    });
     log(`Redirected. url=${page.url()}`);
     await page.waitForLoadState("networkidle", { timeout: 45000 }).catch((e) => log(`networkidle wait: ${e.message}`));
 
@@ -162,11 +230,11 @@ export async function login({ phone, password }) {
     await page.getByRole("button", { name: "Увійти" }).click();
 
     log("Waiting for redirect to personal-accounts...");
-    await withHeartbeat(
-      page,
-      "redirect to personal-accounts",
-      page.waitForURL(/yasno\.ua\/my\/personal-accounts/, { timeout: 45000, waitUntil: "commit" })
-    );
+    await waitForOutcome(page, {
+      successPattern: /yasno\.ua\/my\/personal-accounts/,
+      timeoutMs: 45000,
+      label: "redirect to personal-accounts",
+    });
     log(`Logged in. url=${page.url()}`);
 
     const cookies = await context.cookies("https://app.yasno.ua");

@@ -21,13 +21,13 @@ async function pollYasno(mqttClient, config, state) {
 
     let data;
     try {
-      data = await fetchAccountData(state.cookie, config.accountId);
+      data = await fetchAccountData(state.cookie);
     } catch (err) {
       if (!(err instanceof YasnoAuthError)) throw err;
       log("yasno", "Session expired, re-logging in...");
       const { cookie } = await yasnoLogin({ phone: config.phone, password: config.password });
       state.cookie = cookie;
-      data = await fetchAccountData(state.cookie, config.accountId);
+      data = await fetchAccountData(state.cookie);
     }
 
     publishYasnoData(mqttClient, {
@@ -53,7 +53,6 @@ export function startScheduler(mqttClient, options) {
     const config = {
       phone: options.yasno.phone,
       password: options.yasno.password,
-      accountId: options.yasno.account_id || null,
       discoveryPrefix,
     };
     const state = { cookie: "" };

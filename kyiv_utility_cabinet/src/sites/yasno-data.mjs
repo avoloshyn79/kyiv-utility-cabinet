@@ -30,8 +30,16 @@ async function apiGet(path, cookie) {
 
 function selectAccount(accounts, accountId) {
   if (accountId) {
-    const found = accounts.find((a) => String(a.id) === String(accountId));
-    if (!found) throw new Error(`Account ID '${accountId}' not found in API data`);
+    // Accept either the internal API id or the customer-facing account
+    // number (the one printed on an invoice) - it's an easy mix-up and
+    // both should just work.
+    const found = accounts.find(
+      (a) => String(a.id) === String(accountId) || String(a.accountNumber) === String(accountId)
+    );
+    if (!found) {
+      const available = accounts.map((a) => `id=${a.id} accountNumber=${a.accountNumber}`).join("; ");
+      throw new Error(`Account '${accountId}' not found. Available accounts: ${available}`);
+    }
     return found;
   }
   return accounts.find((a) => a.customerType === "B2C") || accounts[0];

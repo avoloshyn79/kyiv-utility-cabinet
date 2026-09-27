@@ -29,8 +29,10 @@ automations.
 | `mqtt_host` / `mqtt_port` / `mqtt_username` / `mqtt_password` | Broker connection. Leave blank to use the broker Home Assistant's own MQTT integration is configured with (auto-detected via the add-on's `mqtt:want` service dependency — works out of the box with the Mosquitto broker add-on). |
 | `yasno.enabled` | Turn on scheduled polling + MQTT publishing for YASNO. |
 | `yasno.phone` / `yasno.password` | YASNO personal cabinet login. |
-| `yasno.account_id` | Optional — only needed if your YASNO profile has more than one account. |
 | `yasno.interval_minutes` | How often to log in and refresh (default 1440 = once a day). |
+
+If your YASNO profile has more than one account, the first B2C account is
+used automatically (no option to pick a different one yet).
 
 ## What gets created in Home Assistant
 
@@ -77,6 +79,11 @@ endpoints (same `X-Api-Key` as above if configured):
 - Each login takes a few seconds and a temporary memory/CPU spike (real
   Chromium), especially on Raspberry Pi (aarch64) — this is why polling is
   scheduled in hours, not minutes.
+- A login is retried automatically up to 3 times on a transient failure
+  (e.g. the login page's JS bundle failing to load, which happens
+  occasionally even in a real browser). If YASNO itself rejects the phone
+  number or password, the add-on log says so directly and does **not**
+  retry - fix the credentials in the add-on configuration instead.
 - If a site changes its login page's structure, that site's module may need
   updating — check the add-on log for the failure point.
 - The `debt` sensor currently always reads 0 — a known upstream issue (it
