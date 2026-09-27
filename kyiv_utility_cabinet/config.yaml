@@ -1,0 +1,19 @@
+name: "Kyiv Utility Cabinet"
+version: "1.0.0"
+slug: "kyiv_utility_cabinet"
+description: "Logs into Kyiv utility provider personal cabinets (YASNO, Kyivvodokanal, Kyivteploenergo, Kyivgaz) with a real headless browser on request, and returns the resulting session cookie"
+url: "https://github.com/avoloshyn79/kyiv-utility-cabinet"
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: auto
+init: false
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: "Login proxy HTTP API"
+options:
+  api_key: ""
+schema:
+  api_key: str

@@ -1,0 +1,4 @@
+configuration:
+  api_key:
+    name: API key
+    description: Shared secret callers must send as the X-Api-Key header. Leave empty to disable the check (not recommended).
