@@ -1,5 +1,5 @@
 name: "Kyiv Utility Cabinet"
-version: "2.6.2"
+version: "2.7.0"
 slug: "kyiv_utility_cabinet"
 description: "Logs into Kyiv utility provider personal cabinets (YASNO, Kyivvodokanal, Kyivteploenergo, Kyivgaz) on a schedule and publishes the data to Home Assistant over MQTT"
 url: "https://github.com/avoloshyn79/kyiv-utility-cabinet"
@@ -14,8 +14,11 @@ services:
   - mqtt:want
 ports:
   8099/tcp: 8099
+  6080/tcp: 6080
 ports_description:
   8099/tcp: "HTTP API - manual /fetch/<site> calls and /health"
+  6080/tcp: "noVNC remote desktop - only active while kyivvodokanal.setup_mode is on"
+webui: "http://[HOST]:[PORT:6080]/vnc.html?autoconnect=true&resize=remote"
 options:
   debug: false
   api_key: ""
@@ -41,6 +44,7 @@ options:
     email: ""
     password: ""
     interval_minutes: 1440
+    setup_mode: false
     submit_readings:
       enabled: false
       day_of_month: 26
@@ -71,6 +75,7 @@ schema:
     email: str?
     password: password?
     interval_minutes: int(5,10080)
+    setup_mode: bool
     submit_readings:
       enabled: bool
       day_of_month: int(1,28)

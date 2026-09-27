@@ -42,6 +42,7 @@ automations.
 | `kyivvodokanal.submit_readings.enabled` | Turn on automatic monthly meter reading submission to Kyivvodokanal. |
 | `kyivvodokanal.submit_readings.day_of_month` | Day of the month to submit on (default 26). Checked once an hour. |
 | `kyivvodokanal.submit_readings.entity_hot` / `entity_cold` | Home Assistant entity IDs holding the current hot/cold water meter readings. Fill in whichever you actually have a counter for - most accounts have cold only, some have both. |
+| `kyivvodokanal.setup_mode` | Off by default. Turns on the one-time interactive Google/Kyivvodokanal sign-in over a remote desktop (noVNC on port 6080) instead of normal polling - see [Improving the odds: sign into Google once, for real](#improving-the-odds-sign-into-google-once-for-real). Turn back off and restart once you're done. |
 
 If your YASNO profile has more than one account, the first B2C account is
 used automatically (no option to pick a different one yet).
@@ -125,38 +126,51 @@ add-on's log shows a "reCAPTCHA presented an additional challenge" error:
 
 A browser profile with an actual signed-in Google session is one of the
 strongest positive signals reCAPTCHA looks at - much stronger than cookie
-persistence alone. The add-on can't establish that itself (Google's own
-sign-in has strong bot defenses of its own; automating a real login into it
-risks the account getting flagged, and breaks outright with 2FA), so this
-has to be a real, one-time human action:
+persistence alone. Getting one there is trickier than it sounds, though:
 
-1. On your own computer (with Google Chrome already installed), from
-   inside a checkout of this repo's `kyiv_utility_cabinet/` folder
-   (`npm install` already run), run:
-   ```
-   node tools/setup-kyivvodokanal-profile.mjs
-   ```
-   This uses your real installed Chrome, not a bundled test build - more
-   authentic for signing into Google, and avoids the "this browser may not
-   be secure" warning Google shows for unbranded Chromium builds.
-2. A real, visible Chromium window opens. Log into your Google account
-   normally, then go to `https://my.vodokanal.kiev.ua/sign-in` and log in
-   there too (solving the captcha as usual - it's just you, in a real
-   browser).
-3. Close the window. The script prints the profile folder it saved
-   (defaults to somewhere under your OS temp directory).
-4. Copy that **whole folder** onto the add-on's persistent storage (e.g.
-   via the Samba share or SSH & Web Terminal add-ons) to exactly:
-   ```
-   /data/kyivvodokanal-chrome-profile
-   ```
-   replacing whatever the add-on already created there.
-5. Restart the add-on - its headless logins now reuse that already
-   signed-in profile instead of a cookie-less one.
+- **Automating the Google sign-in itself is a dead end.** Google detects
+  that Playwright is driving the browser via the Chrome DevTools Protocol
+  (CDP) and blocks the sign-in outright with "This browser or app may not
+  be secure" - confirmed directly, including with a real installed Chrome
+  (`channel: "chrome"`), not just Playwright's bundled build. Getting past
+  that would require patching the browser to hide that it's
+  automation-controlled, which this project won't do.
+- **Logging in on your own computer and copying the profile over doesn't
+  work either.** Chrome's cookie encryption on Windows (DPAPI) is tied to
+  that specific Windows user and machine; the cookies simply can't be
+  decrypted once the profile folder is copied onto this Linux container.
 
-This is not guaranteed to eliminate the challenge (the add-on's browser is
-still CDP-automated, which is its own signal), but it removes one of the
-biggest gaps between it and a real browser session.
+So this has to be a real, one-time human action, done on Linux (no DPAPI
+problem), through a browser window that Playwright never touches at all
+(no CDP, so nothing for Google to detect) - which means doing it **inside
+the add-on itself**, over a remote desktop:
+
+1. Set an `api_key` in the add-on configuration if you haven't already -
+   it doubles as the password for the remote desktop below, so this isn't
+   left reachable to anyone on your network without one.
+2. Turn on `kyivvodokanal.setup_mode` and restart the add-on. Instead of
+   its normal polling, it launches a plain, non-automated Chromium (no
+   `--remote-debugging-port`, no CDP client ever attached - not
+   distinguishable from an ordinary browser) on a virtual display, and
+   serves it over noVNC.
+3. Open this add-on's **Web UI** button in the Supervisor (or
+   `http://<home-assistant-ip>:6080/vnc.html`), and connect using the
+   first 8 characters of your `api_key` as the password (a limitation of
+   the classic VNC protocol, not something this add-on chose).
+4. You're now looking at a real Chromium window, opened on
+   `accounts.google.com`. Log into your Google account with your actual
+   mouse and keyboard, then go to `https://my.vodokanal.kiev.ua/sign-in`
+   and log in there too (solving the captcha as usual - it's genuinely you,
+   in a real, non-automated browser).
+5. Turn `kyivvodokanal.setup_mode` back off and restart the add-on. Its
+   headless, Playwright-driven logins now reuse that same profile - already
+   signed into Google - instead of a cookie-less one.
+
+This is not guaranteed to eliminate the reCAPTCHA challenge on
+Kyivvodokanal's own login (the add-on's automated browser is still
+CDP-driven for that part, which is its own signal), but it removes one of
+the biggest gaps between it and a real browser session, and it's the only
+way to get an actual signed-in Google session into that profile at all.
 
 Everything else about Kyivvodokanal - scheduled polling, MQTT sensors,
 meter reading submission, the manual button, `debug` logging - works the

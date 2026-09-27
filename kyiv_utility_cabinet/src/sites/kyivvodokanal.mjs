@@ -13,7 +13,10 @@
 // /data/ instead of a fresh throwaway one per login - Google's own cookies
 // (recaptcha risk cookies included) accumulate across runs the same way
 // they would in a real browser you keep reusing, rather than every login
-// looking like a brand-new device to Google.
+// looking like a brand-new device to Google. See kyivvodokanal-setup.mjs
+// for how to get an actual signed-in Google session into that same profile
+// (kyivvodokanal.setup_mode) - it can't be done from here, since Google
+// blocks sign-in outright for a CDP-automated browser like this one.
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { debugLog } from "../logger.mjs";

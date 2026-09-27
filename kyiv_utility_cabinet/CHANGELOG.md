@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.7.0
+
+- Added `kyivvodokanal.setup_mode`: a one-time interactive way to get an
+  actual signed-in Google session into the Kyivvodokanal profile, replacing
+  the local `tools/setup-kyivvodokanal-profile.mjs` script from 2.6.2,
+  which turned out not to work at all - confirmed that Google blocks sign-in
+  outright for any CDP-automated browser (what Playwright's
+  `launch()`/`launchPersistentContext()` produce, real installed Chrome
+  included) with "This browser or app may not be secure," and separately
+  that Windows Chrome's DPAPI-encrypted cookies can't be decrypted once
+  copied onto this Linux container anyway - so a local script could never
+  have worked, on either count.
+- With `setup_mode` on, the add-on launches Playwright's own bundled
+  Chromium binary directly as a plain OS process instead of through any
+  Playwright API - no `--remote-debugging-port`, no CDP client ever
+  attached, indistinguishable from an ordinary browser to Google - on a
+  virtual display (Xvfb), reachable over the network via x11vnc +
+  noVNC/websockify on port 6080 (a "Web UI" button is wired up in the
+  Supervisor for it). You connect with a real browser tab, log into Google
+  and Kyivvodokanal with your actual mouse and keyboard, then turn
+  `setup_mode` back off - the add-on's headless logins reuse that same,
+  now-signed-in profile afterward. Requires `api_key` to be set, since it
+  doubles as the VNC password.
+- Added `xvfb x11vnc novnc websockify` to the Dockerfile for the above.
+- Fixed a real bug from 2.6.0: `index.mjs`'s check for "is any service
+  enabled" only looked at `yasno.enabled`, so enabling only
+  `kyivvodokanal.enabled` (with YASNO off) would never even connect to
+  MQTT or start the scheduler - Kyivvodokanal polling would have silently
+  never run. Found while wiring up `setup_mode`'s interaction with the
+  normal scheduler.
+
 ## 2.6.2
 
 - Added `tools/setup-kyivvodokanal-profile.mjs`: a local, one-time script
