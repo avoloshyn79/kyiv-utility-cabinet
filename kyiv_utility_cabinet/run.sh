@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
 set -e
-exec node /app/src/server.mjs
+exec node /app/src/index.mjs

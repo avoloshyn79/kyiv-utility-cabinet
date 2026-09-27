@@ -1,33 +1,44 @@
 # Kyiv Utility Cabinet
 
-An HTTP login proxy that logs into Kyiv utility provider personal cabinets
-using a real headless Chromium browser (via Playwright), on request. It does
-not store any credentials itself and does not bypass or defeat any anti-bot
-protection — it automates a genuine browser, the same way official mobile
-apps log in through an embedded WebView.
+Logs into Kyiv utility provider personal cabinets using a real headless
+Chromium browser (via Playwright) and publishes the data to Home Assistant
+over MQTT — no `custom_components` Python integration required. It does not
+bypass or defeat any anti-bot protection — it automates a genuine browser,
+the same way official mobile apps log in through an embedded WebView.
 
-Callers (Home Assistant integrations, or your own automations) send
-credentials on every request; the proxy logs in and returns the resulting
-session cookie. Nothing is cached or scheduled inside the add-on — the
-caller decides when to refresh.
+Each enabled service runs its own polling loop inside the add-on: log in,
+fetch account data, publish it as MQTT-discovered sensors. A manual HTTP API
+(`POST /fetch/<site>`) is also available for on-demand logins or your own
+automations.
 
 ## Supported sites
 
-| Path | Site |
-|---|---|
-| `/fetch/yasno` | YASNO personal cabinet (yasno.ua) — electricity |
-
-More sites (Kyivvodokanal, Kyivteploenergo, Kyivgaz) can be added as
-additional modules under `src/sites/`, matching the existing
-`ha-kyivvodokanal-cabinet` and `ha-kte-cabinet` integrations.
+| Site | Scheduled MQTT polling | Manual `/fetch/<site>` |
+|---|---|---|
+| YASNO (electricity) | ✅ | ✅ `/fetch/yasno` |
+| Kyivvodokanal (water) | Planned | Planned |
+| Kyivteploenergo (heating) | Planned | Planned |
+| Kyivgaz (gas) | Planned | Planned |
 
 ## Configuration
 
 | Option | Description |
 |---|---|
-| `api_key` | Shared secret required in the `X-Api-Key` header on every request. Leave empty to disable the check (not recommended once this add-on is reachable from more than just Home Assistant itself). |
+| `api_key` | Shared secret required in the `X-Api-Key` header for manual `/fetch/<site>` calls. Leave empty to disable the check (not recommended once this add-on is reachable from more than just Home Assistant itself). |
+| `discovery_prefix` | MQTT discovery prefix, must match Home Assistant's MQTT integration setting (default `homeassistant`). |
+| `mqtt_host` / `mqtt_port` / `mqtt_username` / `mqtt_password` | Broker connection. Leave blank to use the broker Home Assistant's own MQTT integration is configured with (auto-detected via the add-on's `mqtt:want` service dependency — works out of the box with the Mosquitto broker add-on). |
+| `yasno.enabled` | Turn on scheduled polling + MQTT publishing for YASNO. |
+| `yasno.phone` / `yasno.password` | YASNO personal cabinet login. |
+| `yasno.account_id` | Optional — only needed if your YASNO profile has more than one account. |
+| `yasno.interval_minutes` | How often to log in and refresh (default 1440 = once a day). |
 
-## API
+## What gets created in Home Assistant
+
+With `yasno.enabled: true`, a **YASNO Cabinet** device appears automatically
+(via MQTT discovery) with sensors for balance, debt, consumption, tariffs,
+meter readings, last payment, and account number — no manual entity setup.
+
+## Manual HTTP API
 
 ### `POST /fetch/yasno`
 
@@ -38,31 +49,24 @@ Body:
 { "phone": "+380XXXXXXXXX", "password": "..." }
 ```
 
-Response (200):
-```json
-{ "cookie": "visid_incap_...; other=..." }
-```
-
-Response (502) on login failure:
-```json
-{ "error": "..." }
-```
+Response (200): `{ "cookie": "visid_incap_...; other=..." }`
+Response (502) on login failure: `{ "error": "..." }`
 
 ### `GET /health`
 
 Returns `{ "ok": true, "sites": ["yasno"] }` — use this to confirm the add-on
-is reachable from Home Assistant before troubleshooting further.
-
-## Reaching this add-on from an integration
-
-Home Assistant Core and other add-ons can reach this add-on on the internal
-Supervisor network at `http://kyiv_utility_cabinet:8099`. If that hostname
-does not resolve in your setup, use the host's IP address and the mapped
-port instead.
+is reachable before troubleshooting further:
+```
+curl http://kyiv_utility_cabinet:8099/health
+```
 
 ## Notes
 
 - Each login takes a few seconds and a temporary memory/CPU spike (real
-  Chromium), especially on Raspberry Pi (aarch64).
+  Chromium), especially on Raspberry Pi (aarch64) — this is why polling is
+  scheduled in hours, not minutes.
 - If a site changes its login page's structure, that site's module may need
   updating — check the add-on log for the failure point.
+- The `debt` sensor currently always reads 0 — a known upstream issue (it
+  reads the same API field as `balance`); needs a real `debt` API payload
+  sample to find the correct field.

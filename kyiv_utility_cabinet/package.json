@@ -1,9 +1,10 @@
 {
-  "name": "yasno-cookie-fetcher",
-  "version": "1.0.0",
+  "name": "kyiv-utility-cabinet",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "dependencies": {
-    "playwright": "1.48.0"
+    "playwright": "1.48.0",
+    "mqtt": "^5.10.1"
   }
 }
