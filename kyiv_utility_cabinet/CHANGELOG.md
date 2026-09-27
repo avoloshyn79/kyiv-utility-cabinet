@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.0
+
+- Much more detailed logging for the YASNO login flow, all directly in the
+  add-on's own log (Supervisor UI) - no shell/curl access needed:
+  - A timestamped step for every stage (navigating, waiting for redirect,
+    filling phone/password, etc.)
+  - A "still waiting..." heartbeat every 8s while blocked on a redirect,
+    showing the current URL/title, so a long wait is visible progress
+    instead of silence until the final timeout
+  - Browser-side console errors/warnings, page errors, failed requests,
+    and HTTP responses ≥400 - surfaces network-level issues (blocked
+    resources, DNS failures) directly
+  - On failure: page HTML length, a scan for known bot-protection markers
+    (Incapsula, Distil, Cloudflare challenge, captcha), and the first
+    500 characters of the page's visible text
+- The existing /data/debug/ screenshot+HTML dump and its HTTP endpoints
+  are unchanged and still available for when shell/curl access *is*
+  possible.
+
 ## 2.0.1
 
 - Fixed `page.waitForURL` timeouts during login: it was waiting for the
