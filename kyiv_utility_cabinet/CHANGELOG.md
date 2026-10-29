@@ -1,5 +1,27 @@
 # Changelog
 
+## 2.8.0
+
+- **Breaking (Kyivvodokanal):** the add-on no longer logs into
+  Kyivvodokanal with a browser. You sign in yourself and give it the access
+  token (`localStorage.access_token`, valid 7 days - the site has no refresh
+  mechanism) via the new `kyivvodokanal.token` option or
+  `POST /token/kyivvodokanal` (stored under `/data/`, applied without a
+  restart). See DOCS.md, "Kyivvodokanal access token".
+- Fixed Kyivvodokanal data fetching, which never actually worked: the API
+  is authenticated with `Authorization: Bearer <token>`, not cookies (the
+  site's cookies are only analytics). The add-on used to send those
+  cookies, get 401s, treat that as "session expired" and log in again
+  through the reCAPTCHA on every poll.
+- Added `GET /data/kyivvodokanal` (live account data with the stored token)
+  and `GET /token/kyivvodokanal` (token expiry, never the token itself).
+- Added an **Access token expires** timestamp sensor to the Kyivvodokanal
+  Cabinet device.
+- Removed: `kyivvodokanal.email`, `kyivvodokanal.password`,
+  `kyivvodokanal.setup_mode`, `POST /fetch/kyivvodokanal`,
+  `/debug/kyivvodokanal/*`, the noVNC Web UI on port 6080, and the
+  Xvfb/x11vnc/noVNC packages from the image.
+
 ## 2.7.0
 
 - Added `kyivvodokanal.setup_mode`: a one-time interactive way to get an

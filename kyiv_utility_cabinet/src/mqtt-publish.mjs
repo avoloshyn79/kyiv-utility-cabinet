@@ -127,6 +127,7 @@ const KYIVVODOKANAL_SENSORS = [
     icon: "mdi:calendar-month-outline",
   },
   { key: "last_transmission_date", name: "Last submitted reading date", icon: "mdi:calendar-month-outline" },
+  { key: "token_expires_at", name: "Access token expires", device_class: "timestamp", icon: "mdi:key-chain" },
 ];
 
 function deviceInfo(deviceId, deviceName, manufacturer) {

@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { startHttpServer } from "./server.mjs";
 import { connectMqtt } from "./mqtt-publish.mjs";
 import { startScheduler } from "./scheduler.mjs";
-import { startKyivvodokanalSetupMode } from "./kyivvodokanal-setup.mjs";
 import { setDebugEnabled, log as sharedLog } from "./logger.mjs";
 
 const OPTIONS_PATH = "/data/options.json";
@@ -37,18 +36,10 @@ function main() {
   setDebugEnabled(options.debug);
   log(`Debug logging is ${options.debug ? "ON" : "off"}.`);
 
-  startHttpServer(options.api_key || "");
+  const hooks = {};
+  startHttpServer({ apiKey: options.api_key || "", kyivvodokanalConfigToken: options.kyivvodokanal?.token || "", hooks });
 
-  const setupModeOn = Boolean(options.kyivvodokanal?.setup_mode);
-  if (setupModeOn) {
-    log(
-      "Kyivvodokanal setup_mode is ON: starting the one-time remote-desktop profile setup instead of normal " +
-        "Kyivvodokanal polling. Turn setup_mode back off and restart the add-on once you're done."
-    );
-    startKyivvodokanalSetupMode(options);
-  }
-
-  const anyServiceEnabled = Boolean(options.yasno?.enabled) || (Boolean(options.kyivvodokanal?.enabled) && !setupModeOn);
+  const anyServiceEnabled = Boolean(options.yasno?.enabled) || Boolean(options.kyivvodokanal?.enabled);
   if (!anyServiceEnabled) {
     log("No service is enabled in the add-on configuration - only the manual HTTP API is running.");
     return;
@@ -57,15 +48,7 @@ function main() {
   const mqttConfig = resolveMqttConfig(options);
   const mqttClient = connectMqtt(mqttConfig, (msg) => log(msg));
 
-  // While setup_mode is on, a plain (non-automated) Chromium is holding the
-  // Kyivvodokanal profile directory open for the interactive login - a
-  // Playwright-driven login against that same directory at the same time
-  // would collide with it. Suppress just the Kyivvodokanal scheduler in
-  // that case; YASNO keeps running normally.
-  const schedulerOptions = setupModeOn
-    ? { ...options, kyivvodokanal: { ...options.kyivvodokanal, enabled: false } }
-    : options;
-  startScheduler(mqttClient, schedulerOptions);
+  Object.assign(hooks, startScheduler(mqttClient, options));
 }
 
 main();

@@ -23,10 +23,12 @@ in Home Assistant (e.g. the official Mosquitto broker add-on).
    - Set an **API key** (recommended) — a secret string required for manual
      `/fetch/<site>` calls
    - Turn on `yasno.enabled` and fill in your YASNO phone number and password
+   - For water: turn on `kyivvodokanal.enabled` and paste your access token
+     into `kyivvodokanal.token` - see [Kyivvodokanal token](#kyivvodokanal-token)
 5. Start the add-on
 
-A **YASNO Cabinet** device with its sensors appears in Home Assistant
-automatically, no further setup needed. See
+A **YASNO Cabinet** (and **Kyivvodokanal Cabinet**) device with its sensors
+appears in Home Assistant automatically, no further setup needed. See
 [`kyiv_utility_cabinet/DOCS.md`](kyiv_utility_cabinet/DOCS.md) for the full
 configuration and API reference.
 
@@ -43,15 +45,28 @@ available for on-demand logins from your own automations.
 | Site | Scheduled MQTT polling | Manual `/fetch/<site>` |
 |---|---|---|
 | YASNO (electricity) | ✅ | ✅ |
-| Kyivvodokanal (water) | ✅ | ✅ |
+| Kyivvodokanal (water) | ✅ (token you provide) | `GET /data/kyivvodokanal` |
 | Kyivteploenergo (heating) | Planned | Planned |
 | Kyivgaz (gas) | Planned | Planned |
 
-Kyivvodokanal's login page has a Google reCAPTCHA v2 checkbox. The add-on
-clicks it like a real user would and does not attempt to solve a
-harder challenge if Google presents one - see
-[`kyiv_utility_cabinet/DOCS.md`](kyiv_utility_cabinet/DOCS.md#kyivvodokanal-and-recaptcha)
-for what that means in practice.
+### Kyivvodokanal token
+
+Kyivvodokanal's login page is behind a Google reCAPTCHA, so the add-on
+doesn't log in there at all. You sign in in your own browser and give the
+add-on the access token, which it stores and uses to fetch the data:
+
+1. Sign in at https://my.vodokanal.kiev.ua on a computer.
+2. Press **F12**, open the **Console** tab and run
+   `copy(localStorage.access_token)` - the token (starts with `eyJ`) is now
+   on your clipboard.
+3. Paste it into the add-on's `kyivvodokanal.token` option and restart the
+   add-on. Or send it to `POST /token/kyivvodokanal`, which needs no restart.
+
+The token is valid for **7 days** and can't be extended - repeat the steps
+when it expires (an **Access token expires** sensor shows when). Full
+instructions, including pasting new tokens from the Home Assistant UI and a
+reminder automation:
+[`kyiv_utility_cabinet/DOCS.md`](kyiv_utility_cabinet/DOCS.md#kyivvodokanal-access-token).
 
 Adding a site is two new modules under
 [`kyiv_utility_cabinet/src/sites/`](kyiv_utility_cabinet/src/sites/) (login +

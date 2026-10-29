@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { login as yasnoLogin } from "./sites/yasno.mjs";
 import { fetchAccountData, submitMeterReadings, YasnoAuthError } from "./sites/yasno-data.mjs";
-import { login as kyivvodokanalLogin } from "./sites/kyivvodokanal.mjs";
+import { currentToken, normalizeToken, tokenExpiry } from "./kyivvodokanal-token.mjs";
 import {
   fetchAccountData as fetchKyivvodokanalData,
   submitReadings as submitKyivvodokanalReadings,
@@ -192,43 +192,42 @@ async function checkAndSubmitYasnoReading(config, state) {
 }
 
 // --- Kyivvodokanal --------------------------------------------------------
-// Same overall shape as YASNO above; the differences are the login module
-// (email/password, and a reCAPTCHA click that may or may not be accepted -
-// see kyivvodokanal.mjs) and the submitted readings, which are per-counter
-// (hot/cold water) rather than per-tariff-zone.
+// Same overall shape as YASNO above, except there is no login: the add-on
+// never signs into Kyivvodokanal (reCAPTCHA), it only uses the access token
+// you provide - see kyivvodokanal-token.mjs. When the token is missing,
+// expired or rejected, polling just logs what to do and waits for a new one.
+// Submitted readings are per-counter (hot/cold water) rather than
+// per-tariff-zone.
 
-async function ensureKyivvodokanalLoggedIn(config, state) {
-  if (state.cookie) return state.cookie;
-  if (!state.loginPromise) {
-    log("kyivvodokanal", "Logging in...");
-    state.loginPromise = kyivvodokanalLogin({ email: config.email, password: config.password })
-      .then(({ cookie }) => {
-        state.cookie = cookie;
-        log("kyivvodokanal", "Login OK.");
-        return cookie;
-      })
-      .finally(() => {
-        state.loginPromise = null;
-      });
+const TOKEN_HELP =
+  "Sign in at https://my.vodokanal.kiev.ua in your browser, copy localStorage.access_token " +
+  "(DevTools -> Application -> Local Storage) and set it as kyivvodokanal.token or POST it to /token/kyivvodokanal.";
+
+function requireKyivvodokanalToken(config) {
+  const token = currentToken(config.token);
+  if (!token) throw new KyivvodokanalAuthError(`No access token configured. ${TOKEN_HELP}`);
+  const expiry = tokenExpiry(token);
+  if (expiry && expiry <= new Date()) {
+    throw new KyivvodokanalAuthError(`Access token expired at ${expiry.toISOString()}. ${TOKEN_HELP}`);
   }
-  return state.loginPromise;
+  return token;
+}
+
+export async function fetchKyivvodokanalNow(config) {
+  const token = requireKyivvodokanalToken(config);
+  try {
+    const data = await fetchKyivvodokanalData(token);
+    data.token_expires_at = tokenExpiry(token)?.toISOString() ?? null;
+    return data;
+  } catch (err) {
+    if (err instanceof KyivvodokanalAuthError) err.message = `${err.message} - token rejected. ${TOKEN_HELP}`;
+    throw err;
+  }
 }
 
 async function pollKyivvodokanal(mqttClient, config, state) {
   try {
-    await ensureKyivvodokanalLoggedIn(config, state);
-
-    let data;
-    try {
-      data = await fetchKyivvodokanalData(state.cookie);
-    } catch (err) {
-      if (!(err instanceof KyivvodokanalAuthError)) throw err;
-      log("kyivvodokanal", "Session expired, re-logging in...");
-      const { cookie } = await kyivvodokanalLogin({ email: config.email, password: config.password });
-      state.cookie = cookie;
-      data = await fetchKyivvodokanalData(state.cookie);
-    }
-
+    const data = await fetchKyivvodokanalNow(config);
     state.lastData = data;
     publishKyivvodokanalData(mqttClient, {
       discoveryPrefix: config.discoveryPrefix,
@@ -236,7 +235,7 @@ async function pollKyivvodokanal(mqttClient, config, state) {
       deviceName: "Kyivvodokanal Cabinet",
       data,
     });
-    log("kyivvodokanal", `Published. Debt=${data.debt} AmountToPay=${data.amount_to_pay}`);
+    log("kyivvodokanal", `Published. Debt=${data.debt} AmountToPay=${data.amount_to_pay} TokenExpires=${data.token_expires_at}`);
   } catch (err) {
     log("kyivvodokanal", `FAILED: ${err.message}`);
   }
@@ -278,15 +277,15 @@ async function submitKyivvodokanalReadingNow(config, state, trigger) {
 
   try {
     const submitConfig = config.submitReadings;
-    await ensureKyivvodokanalLoggedIn(config, state);
+    const token = requireKyivvodokanalToken(config);
     if (!state.lastData) {
-      state.lastData = await fetchKyivvodokanalData(state.cookie);
+      state.lastData = await fetchKyivvodokanalNow(config);
     }
 
     const readings = await buildKyivvodokanalReadings(submitConfig, state.lastData.counter_id_by_type);
 
     log("kyivvodokanal", `[${trigger}] Submitting meter reading(s) for ${yearMonth}: ${JSON.stringify(readings)}`);
-    await submitKyivvodokanalReadings(state.cookie, readings);
+    await submitKyivvodokanalReadings(token, readings);
     log("kyivvodokanal", `[${trigger}] Meter reading submitted for ${yearMonth}.`);
 
     if (trigger === "scheduled") {
@@ -295,9 +294,6 @@ async function submitKyivvodokanalReadingNow(config, state, trigger) {
       saveSubmissionState(submissionState);
     }
   } catch (err) {
-    if (err instanceof KyivvodokanalAuthError) {
-      state.cookie = "";
-    }
     log("kyivvodokanal", `[${trigger}] Meter reading submission FAILED: ${err.message}`);
   } finally {
     state.submitInProgress = false;
@@ -328,9 +324,12 @@ async function checkAndSubmitKyivvodokanalReading(config, state) {
 /**
  * @param {import('mqtt').MqttClient} mqttClient
  * @param {object} options - the add-on's /data/options.json contents
+ * @returns {{ onKyivvodokanalToken: () => void }}
  */
 export function startScheduler(mqttClient, options) {
   const discoveryPrefix = options.discovery_prefix || "homeassistant";
+  // Callbacks for server.mjs: poll right away when a new token is posted.
+  const hooks = { onKyivvodokanalToken: () => {} };
 
   if (options.yasno?.enabled) {
     const submit = options.yasno.submit_readings || {};
@@ -387,8 +386,7 @@ export function startScheduler(mqttClient, options) {
   if (options.kyivvodokanal?.enabled) {
     const submit = options.kyivvodokanal.submit_readings || {};
     const config = {
-      email: options.kyivvodokanal.email,
-      password: options.kyivvodokanal.password,
+      token: options.kyivvodokanal.token,
       discoveryPrefix,
       submitReadings: {
         enabled: Boolean(submit.enabled),
@@ -397,7 +395,12 @@ export function startScheduler(mqttClient, options) {
         entityCold: submit.entity_cold || "",
       },
     };
-    const state = { cookie: "", lastData: null, submitInProgress: false };
+    try {
+      normalizeToken(config.token);
+    } catch (err) {
+      log("kyivvodokanal", `Ignoring kyivvodokanal.token option: ${err.message}`);
+    }
+    const state = { lastData: null, submitInProgress: false };
     const intervalMs = Math.max(5, Number(options.kyivvodokanal.interval_minutes) || 1440) * 60 * 1000;
 
     log("kyivvodokanal", `Scheduler starting, polling every ${intervalMs / 60000} minute(s).`);
@@ -427,8 +430,11 @@ export function startScheduler(mqttClient, options) {
       });
       log("kyivvodokanal", "Manual 'Submit water readings now' button published.");
     }
+
+    hooks.onKyivvodokanalToken = () => pollKyivvodokanal(mqttClient, config, state);
   }
 
   // Future services (Kyivteploenergo, Kyivgaz) plug in here the same way,
   // once their site modules exist under ./sites/.
+  return hooks;
 }

@@ -1,20 +1,22 @@
-// Minimal HTTP proxy: POST /fetch/<site> { ...credentials } -> { cookie }
-// Each site module in ./sites implements login(credentials) -> { cookie }.
-// No credentials are stored here for this path - manual/on-demand callers
-// pass them in on every request. (The scheduler in scheduler.mjs is the
-// other caller of these same site modules, using credentials from the
-// add-on's own configuration.)
+// Minimal HTTP API:
+//   POST /fetch/<site> { ...credentials } -> { cookie }   (login proxy, YASNO)
+//   POST /token/kyivvodokanal { token }   -> stores the Kyivvodokanal access token
+//   GET  /token/kyivvodokanal             -> token status (expiry only, never the token)
+//   GET  /data/kyivvodokanal              -> live account data fetched with that token
+// Login-proxy callers pass credentials on every request; nothing is stored
+// for that path. (The scheduler in scheduler.mjs is the other caller of the
+// same site modules, using credentials from the add-on's own configuration.)
 import { createServer } from "node:http";
 import { readFileSync, statSync } from "node:fs";
 import { login as yasnoLogin } from "./sites/yasno.mjs";
-import { login as kyivvodokanalLogin } from "./sites/kyivvodokanal.mjs";
+import { currentToken, saveToken, tokenExpiry, KyivvodokanalTokenError } from "./kyivvodokanal-token.mjs";
+import { fetchKyivvodokanalNow } from "./scheduler.mjs";
 
 const PORT = 8099;
 const DEBUG_DIR = "/data/debug";
 
 const SITES = {
   yasno: yasnoLogin,
-  kyivvodokanal: kyivvodokanalLogin,
 };
 
 function debugFilesFor(site) {
@@ -25,7 +27,7 @@ function debugFilesFor(site) {
   };
 }
 
-const DEBUG_FILES = { ...debugFilesFor("yasno"), ...debugFilesFor("kyivvodokanal") };
+const DEBUG_FILES = { ...debugFilesFor("yasno") };
 
 function log(message) {
   console.log(`[${new Date().toISOString()}] [http] ${message}`);
@@ -52,23 +54,37 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
-export function startHttpServer(apiKey) {
+function tokenStatus(token) {
+  const expiry = tokenExpiry(token);
+  return {
+    configured: Boolean(token),
+    expires_at: expiry?.toISOString() ?? null,
+    hours_left: expiry ? Number(((expiry.getTime() - Date.now()) / 3_600_000).toFixed(1)) : null,
+  };
+}
+
+/**
+ * @param {{ apiKey: string, kyivvodokanalConfigToken: string, hooks: { onKyivvodokanalToken?: () => void } }} args
+ *   hooks is filled in by index.mjs once the scheduler has started.
+ */
+export function startHttpServer({ apiKey, kyivvodokanalConfigToken, hooks }) {
   if (!apiKey) {
-    log("WARNING: no api_key set in add-on configuration - anyone reachable on this network can call the login proxy.");
+    log("WARNING: no api_key set in add-on configuration - anyone reachable on this network can call this API.");
   }
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
-      return sendJson(res, 200, { ok: true, sites: Object.keys(SITES) });
+      return sendJson(res, 200, { ok: true, sites: [...Object.keys(SITES), "kyivvodokanal"] });
+    }
+
+    if (apiKey && req.headers["x-api-key"] !== apiKey) {
+      return sendJson(res, 401, { error: "Missing or invalid X-Api-Key header" });
     }
 
     const debugFile = req.method === "GET" ? DEBUG_FILES[url.pathname] : undefined;
     if (debugFile) {
-      if (apiKey && req.headers["x-api-key"] !== apiKey) {
-        return sendJson(res, 401, { error: "Missing or invalid X-Api-Key header" });
-      }
       try {
         statSync(debugFile.file);
         const body = readFileSync(debugFile.file);
@@ -79,12 +95,38 @@ export function startHttpServer(apiKey) {
       }
     }
 
-    if (req.method !== "POST" || !url.pathname.startsWith("/fetch/")) {
-      return sendJson(res, 404, { error: "Not found" });
+    if (url.pathname === "/token/kyivvodokanal") {
+      if (req.method === "GET") return sendJson(res, 200, tokenStatus(currentToken(kyivvodokanalConfigToken)));
+      if (req.method !== "POST") return sendJson(res, 405, { error: "Use GET or POST" });
+      let body;
+      try {
+        body = JSON.parse(await readBody(req));
+      } catch (err) {
+        return sendJson(res, 400, { error: `Invalid JSON body: ${err.message}` });
+      }
+      try {
+        const { token } = saveToken(body.token);
+        const status = tokenStatus(token);
+        log(`Kyivvodokanal token saved (expires ${status.expires_at}).`);
+        hooks.onKyivvodokanalToken?.();
+        return sendJson(res, 200, status);
+      } catch (err) {
+        if (err instanceof KyivvodokanalTokenError) return sendJson(res, 400, { error: err.message });
+        throw err;
+      }
     }
 
-    if (apiKey && req.headers["x-api-key"] !== apiKey) {
-      return sendJson(res, 401, { error: "Missing or invalid X-Api-Key header" });
+    if (req.method === "GET" && url.pathname === "/data/kyivvodokanal") {
+      try {
+        return sendJson(res, 200, await fetchKyivvodokanalNow({ token: kyivvodokanalConfigToken }));
+      } catch (err) {
+        log(`Kyivvodokanal data request failed: ${err.message}`);
+        return sendJson(res, 502, { error: err.message });
+      }
+    }
+
+    if (req.method !== "POST" || !url.pathname.startsWith("/fetch/")) {
+      return sendJson(res, 404, { error: "Not found" });
     }
 
     const site = url.pathname.slice("/fetch/".length);
@@ -112,7 +154,7 @@ export function startHttpServer(apiKey) {
   });
 
   server.listen(PORT, () => {
-    log(`Kyiv Utility Cabinet HTTP API listening on :${PORT}. Sites: ${Object.keys(SITES).join(", ")}`);
+    log(`Kyiv Utility Cabinet HTTP API listening on :${PORT}.`);
   });
 
   return server;

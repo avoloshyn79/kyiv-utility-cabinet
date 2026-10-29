@@ -1,5 +1,5 @@
 // Fetches Kyivvodokanal personal-cabinet account data using an already-
-// obtained session cookie. Mirrors custom_components/kyivvodokanal_cabinet's
+// obtained access token. Mirrors custom_components/kyivvodokanal_cabinet's
 // api.py + coordinator.py in the ha-kyivvodokanal-cabinet repo, so the two
 // stay in sync.
 const API_BASE = "https://my.vodokanal.kiev.ua";
@@ -11,32 +11,22 @@ const COUNTER_TYPE_COLD_KEYWORDS = ["холод", "cold"];
 
 export class KyivvodokanalAuthError extends Error {}
 
-function getCookieValue(cookie, name) {
-  for (const item of cookie.split(";")) {
-    const idx = item.indexOf("=");
-    if (idx === -1) continue;
-    if (item.slice(0, idx).trim() === name) return item.slice(idx + 1).trim();
-  }
-  return null;
-}
-
-function defaultHeaders(cookie) {
-  const headers = {
+// The API is Bearer-token authenticated (the JWT the SPA keeps in
+// localStorage.access_token) - not cookie-based.
+function defaultHeaders(token) {
+  return {
     Accept: "application/json, text/plain, */*",
     "Content-Type": "application/json",
     "User-Agent": USER_AGENT,
     "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
     Referer: API_BASE,
     Origin: API_BASE,
-    Cookie: cookie,
+    Authorization: `Bearer ${token}`,
   };
-  const xsrfToken = getCookieValue(cookie, "XSRF-TOKEN");
-  if (xsrfToken) headers["X-XSRF-TOKEN"] = xsrfToken;
-  return headers;
 }
 
-async function apiGet(path, cookie) {
-  const response = await fetch(`${API_BASE}${path}`, { headers: defaultHeaders(cookie) });
+async function apiGet(path, token) {
+  const response = await fetch(`${API_BASE}${path}`, { headers: defaultHeaders(token) });
   if (response.status === 401 || response.status === 403) {
     throw new KyivvodokanalAuthError(`Authentication failed (HTTP ${response.status}) for ${path}`);
   }
@@ -49,16 +39,16 @@ async function apiGet(path, cookie) {
     return JSON.parse(text);
   } catch {
     if (text.toLowerCase().includes("<html") || text.toLowerCase().includes("login")) {
-      throw new KyivvodokanalAuthError("Authentication failed or invalid session cookie");
+      throw new KyivvodokanalAuthError("Authentication failed or invalid session token");
     }
     throw new Error(`Invalid JSON response from ${path}`);
   }
 }
 
-async function apiPost(path, cookie, body) {
+async function apiPost(path, token, body) {
   const response = await fetch(`${API_BASE}${path}`, {
     method: "POST",
-    headers: defaultHeaders(cookie),
+    headers: defaultHeaders(token),
     body: JSON.stringify(body),
   });
   if (response.status === 401 || response.status === 403) {
@@ -77,8 +67,8 @@ async function apiPost(path, cookie, body) {
   }
 }
 
-async function getPaymentsHistory(cookie, startDate, endDate) {
-  return apiPost("/api/warehouse/consumer/payments/history", cookie, {
+async function getPaymentsHistory(token, startDate, endDate) {
+  return apiPost("/api/warehouse/consumer/payments/history", token, {
     serviceProviderGroupIds: [22],
     financePointId: "",
     from: startDate,
@@ -86,32 +76,32 @@ async function getPaymentsHistory(cookie, startDate, endDate) {
   });
 }
 
-async function getAmountToPay(cookie, serviceProviderCode, invoiceAccountCode) {
+async function getAmountToPay(token, serviceProviderCode, invoiceAccountCode) {
   return apiGet(
     `/api/warehouse/consumer/invoice/amount_to_pay?serviceProviderCode=${serviceProviderCode}&code=${invoiceAccountCode}`,
-    cookie
+    token
   );
 }
 
-async function getCounters(cookie, serviceProviderCode, invoiceAccountCode) {
+async function getCounters(token, serviceProviderCode, invoiceAccountCode) {
   return apiGet(
     `/api/warehouse/consumer/counters?serviceProviderCode=${serviceProviderCode}&invoiceAccountCode=${invoiceAccountCode}`,
-    cookie
+    token
   );
 }
 
-async function getCounterFactorsHistory(cookie, invoiceAccountCode, serviceProviderCode, startDate, endDate) {
-  return apiPost("/api/warehouse/consumer/counter/factors/history", cookie, {
+async function getCounterFactorsHistory(token, invoiceAccountCode, serviceProviderCode, startDate, endDate) {
+  return apiPost("/api/warehouse/consumer/counter/factors/history", token, {
     invoiceAccountCode,
     serviceProviderCode,
     range: { from: startDate, to: endDate },
   });
 }
 
-async function getTariffs(cookie, serviceProviderCode, invoiceAccountCode) {
+async function getTariffs(token, serviceProviderCode, invoiceAccountCode) {
   let result = await apiGet(
     `/api/warehouse/consumer/tariff?serviceProviderCode=${serviceProviderCode}&invoiceAccountCode=${invoiceAccountCode}`,
-    cookie
+    token
   );
   // The API sometimes wraps the real payload as { text: "<json string>" }.
   if (result && typeof result === "object" && !Array.isArray(result) && "text" in result) {
@@ -120,15 +110,15 @@ async function getTariffs(cookie, serviceProviderCode, invoiceAccountCode) {
   return result;
 }
 
-async function getLastFactors(cookie, counterId) {
-  return apiGet(`/api/warehouse/consumer/counter/${counterId}/last-factors`, cookie);
+async function getLastFactors(token, counterId) {
+  return apiGet(`/api/warehouse/consumer/counter/${counterId}/last-factors`, token);
 }
 
 /**
  * Submits meter readings, e.g. [{ counterId: 123, factor: 45.6 }].
  */
-export async function submitReadings(cookie, readings) {
-  return apiPost("/api/warehouse/consumer/counter/factor", cookie, readings);
+export async function submitReadings(token, readings) {
+  return apiPost("/api/warehouse/consumer/counter/factor", token, readings);
 }
 
 function extractServiceProviderAndInvoiceCode(payments) {
@@ -270,13 +260,13 @@ function parseLastFactorsDates(lastFactors, counterTypeById) {
   return summary;
 }
 
-export async function fetchAccountData(cookie) {
+export async function fetchAccountData(token) {
   const now = new Date();
   const start = new Date(Date.UTC(now.getUTCFullYear(), 0, 1, 0, 0, 0));
   const startIso = start.toISOString();
   const endIso = now.toISOString();
 
-  const payments = await getPaymentsHistory(cookie, startIso, endIso);
+  const payments = await getPaymentsHistory(token, startIso, endIso);
   const { serviceProviderCode, invoiceAccountCode } = extractServiceProviderAndInvoiceCode(payments);
 
   let invoiceAmount = {};
@@ -290,10 +280,10 @@ export async function fetchAccountData(cookie) {
 
   if (invoiceAccountCode) {
     const spCode = serviceProviderCode || DEFAULT_SERVICE_PROVIDER_CODE;
-    invoiceAmount = await getAmountToPay(cookie, spCode, invoiceAccountCode);
-    counters = await getCounters(cookie, spCode, invoiceAccountCode);
-    factors = await getCounterFactorsHistory(cookie, invoiceAccountCode, spCode, startIso, endIso);
-    tariffs = await getTariffs(cookie, spCode, invoiceAccountCode);
+    invoiceAmount = await getAmountToPay(token, spCode, invoiceAccountCode);
+    counters = await getCounters(token, spCode, invoiceAccountCode);
+    factors = await getCounterFactorsHistory(token, invoiceAccountCode, spCode, startIso, endIso);
+    tariffs = await getTariffs(token, spCode, invoiceAccountCode);
 
     const parsedCounters = parseCountersSummary(counters);
     countersSummary = parsedCounters.summary;
@@ -304,7 +294,7 @@ export async function fetchAccountData(cookie) {
       const counterId = counter?.id;
       if (counterId == null) continue;
       try {
-        lastFactors.push(await getLastFactors(cookie, String(counterId)));
+        lastFactors.push(await getLastFactors(token, String(counterId)));
       } catch {
         // Matches the Python coordinator: log-and-continue, one counter's
         // failure shouldn't take down the whole update.
